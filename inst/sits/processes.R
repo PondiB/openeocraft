@@ -10,18 +10,13 @@ save_result <- function(data, format, options = NULL) {
   if (!(format %in% base::tolower(base::names(outputFormats)))) {
     stop(base::paste("Format", format, "is not supported."))
   }
-  work_dir <- openeocraft::user_workspace()
-  filename <- base::paste0("result", openeocraft::format_ext(format))
-  filename <- base::file.path(work_dir, filename)
-  if (format == "rds") {
-    base::saveRDS(data, filename)
-  } else {
-    stars::write_stars(data, filename)
-  }
-  base::structure(
-    base::list(data = filename, format = format, options = options),
-    class = base::c(base::paste0("openeo_", format))
-  )
+  # TODO: split data object into different files based on dates and
+  #  bands dimensions.
+  #  The number of output files will be: N(dates) * N(bands)
+  #  The format parameter just defines the file type to be saved in
+  #  this process.
+  openeocraft::save_result(data, format)
+  return(TRUE)
 }
 
 #* @openeo-process

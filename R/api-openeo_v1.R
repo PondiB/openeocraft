@@ -7,9 +7,6 @@ api_credential.openeo_v1 <- function(api, req, res) {
   password <- auth[[2]]
   file <- api_attr(api, "credentials")
   credentials <- readRDS(file)
-  print(user)
-  print(password)
-  print(credentials)
   if (!user %in% names(credentials$users) ||
       credentials$users[[user]]$password != password) {
     api_stop(403, "User or password does not match")
@@ -18,11 +15,14 @@ api_credential.openeo_v1 <- function(api, req, res) {
   if (!"token" %in% names(credentials$users[[user]])) {
     credentials <- new_token(credentials, user, 30)
     saveRDS(credentials, file)
-  } else if (credentials$users[[user]]$expiry > Sys.time()) {
-    old_token <- credentials$users[[user]]$token
-    credentials$tokens[[old_token]] <- NULL
-    credentials <- new_token(credentials, user, 30)
-    saveRDS(credentials, file)
+  } else {
+    token <- credentials$users[[user]]$token
+    if (credentials$tokens[[token]]$expiry > Sys.time()) {
+      old_token <- credentials$users[[user]]$token
+      credentials$tokens[[old_token]] <- NULL
+      credentials <- new_token(credentials, user, 30)
+      saveRDS(credentials, file)
+    }
   }
   list(access_token = credentials$users[[user]]$token)
 }
@@ -125,7 +125,45 @@ api_result.openeo_v1 <- function(api, req, res) {
   token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
   user <- token_user(api, token)
   pg <- req$body
-  result <- run_pgraph(api, user, pg)
+
+  # TODO: create job_check
+  #job_prepare(api, user, job)
+  # - fill defaults
+  # - check consistency of the provided fields
+  # - also check plan
+  job_id <- job_sync_id()
+  job <- list(
+    id = job_id,
+    title = "syncronous job",
+    description = "syncronous job",
+    process = pg,
+    status = "created",
+    created = Sys.time(),
+    plan = "Free",
+    budget = 0.0,
+    log_level = "Info",
+    links = list()
+  )
+  # TODO: create directory and job RDS file as an atomic transaction
+  # create job's directory
+  job_new_dir(api, user, job)
+  # TODO: how to avoid concurrency issues on reading/writing?
+  # use some specific package? e.g. filelock, sqllite?, mongodb?
+  job_crt_rds(api, user, job)
+  job_sync(api, req, user, job_id)
+  result_dir <- file.path(job_get_dir(api, user, job_id))
+  result_files <- list.files(result_dir, pattern = "^[^_]", full.names = TRUE)
+  if (length(result_files) == 1) {
+    result <- structure(
+      list(data = result_files),
+      class = paste0("openeo_", ext_format(result_files))
+    )
+    return(data_serializer(result, res))
+  }
+  result_files <- list.files(result_dir, full.names = TRUE)
+  tar_file <- file.path(job_get_dir(api, user, job_id), "_files.tar")
+  utils::tar(tar_file, result_files)
+  result <- structure(list(data = tar_file), class = "openeo_tar")
   data_serializer(result, res)
 }
 

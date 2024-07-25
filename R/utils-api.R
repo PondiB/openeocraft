@@ -245,27 +245,31 @@ new_token <- function(credentials, user, valid_days = 30) {
   token <- ids::random_id()
   expiry <- Sys.time() + valid_days * 60 * 60 * 24
   credentials$users[[user]]$token <- token
-  credentials$users[[user]]$expiry <- expiry
-  credentials$tokens[[token]] <- user
+  credentials$tokens[[token]]$expiry <- expiry
+  credentials$tokens[[token]]$user <- user
   credentials
 }
 #' @export
 token_user <- function(api, token) {
+  if (is.null(token)) {
+    api_stop(401, "Token is missing")
+  }
   file <- api_attr(api, "credentials")
   stopifnot(!is.null(file) || file.exists(file))
   credentials <- readRDS(file)
   if (!token %in% names(credentials$tokens)) {
     api_stop(401, "Invalid token")
   }
-  user <- credentials$tokens[[token]]
-  if (Sys.time() > credentials$users[[user]]$expiry) {
+  if (Sys.time() > credentials$tokens[[token]]$expiry) {
     api_stop(401, "Token expired")
   }
+  user <- credentials$tokens[[token]]$user
   user
 }
 api_workdir <- function(api) {
   api$work_dir
 }
+#' @export
 api_user_workspace <- function(api, user) {
   if (!dir.exists(api_workdir(api))) {
     dir.create(api_workdir(api))
@@ -277,13 +281,110 @@ api_user_workspace <- function(api, user) {
   }
   workspace_dir
 }
-#' @export
-user_workspace <- function() {
-  env <- parent.frame(2)
-  api_stopifnot(exists("api", env) && exists("user", env), status = 500,
-                "api and user objects not defined in the evaluation scope")
-  api_user_workspace(env$api, env$user)
+current_api <- function() {
+  env <- parent.frame(3)
+  api_stopifnot(exists("api", env), status = 500,
+                "api object is not defined in the evaluation scope")
+  env$api
 }
+current_user <- function() {
+  env <- parent.frame(3)
+  api_stopifnot(exists("user", env), status = 500,
+                "user is not defined in the evaluation scope")
+  env$user
+}
+current_job <- function() {
+  env <- parent.frame(3)
+  api_stopifnot(exists("job", env), status = 500,
+                "job object is not defined in the evaluation scope")
+  env$job
+}
+current_request <- function() {
+  env <- parent.frame(3)
+  api_stopifnot(exists("req", env), status = 500,
+                "request object is not defined in the evaluation scope")
+  env$req
+}
+#' @export
+save_result <- function(data, format) {
+  api <- current_api()
+  user <- current_user()
+  job <- current_job()
+  req <- current_request()
+  job_dir <- job_get_dir(api, user, job$id)
+  host <- get_host(api, req)
+  times <- stars::st_get_dimension_values(data, "t")
+  bands <- "default"
+  no_bands <- TRUE
+  if ("bands" %in% names(stars::st_dimensions(data))) {
+    bands <- stars::st_get_dimension_values(data, "bands")
+    no_bands <- FALSE
+  }
+  data <- split(data, 3)
+  results <- list()
+  for (i in seq_along(times)) {
+    assets_file <- lapply(seq_along(bands), \(j) {
+      asset_file <- paste0(paste(bands[[j]], times[[i]], sep = "_"),
+                           format_ext(format))
+      if (no_bands) {
+        stars::write_stars(dplyr::select(data[,,i], dplyr::all_of(j)), file.path(job_dir, asset_file))
+      } else {
+        stars::write_stars(dplyr::select(data[,,,i], dplyr::all_of(j)), file.path(job_dir, asset_file))
+      }
+      asset_file
+    })
+    # TODO: implement asset tokens
+    assets <- lapply(assets_file, \(asset_file) {
+      list(
+        href = make_url(host, file.path("/files/jobs", job$id, asset_file),
+                        token = base64enc::base64encode(charToRaw(user))),
+        # TODO: implement format_content_type() function
+        type = format_content_type(format),
+        roles = list("data")
+      )
+    })
+    names(assets) <- paste0(bands, "_", times[[i]])
+    results <- c(results, assets)
+    # bbox <- sf::st_bbox(data)
+    # id <- digest::digest(list(bbox, times[[i]]))
+    # item_file <- paste0("_", id, ".json")
+    # item <- list(
+    #   id = id,
+    #   type = "Feature",
+    #   geometry = NULL,
+    #   properties = list(
+    #     datetime = format(as.POSIXlt(times[[i]]), "%Y-%m-%dT%H:%M:%SZ")
+    #   ),
+    #   assets = assets,
+    #   links = list(
+    #     list(
+    #       rel = "self",
+    #       href = make_url(host, paste0("/files/jobs/", job$id, item_file)),
+    #       type = "application/geo+json"
+    #     )
+    #   )
+    # )
+    # jsonlite::write_json(
+    #   x = item,
+    #   path = file.path(job_dir, item_file),
+    #   auto_unbox = TRUE
+    # )
+    # list(
+    #   href = item_file,
+    #   rel = "item",
+    #   type = "application/geo+json"
+    # )
+  }
+  # TODO: where to out assets? links? assets?
+  collection <- job_empty_collection(api, user, job)
+  collection$assets <- results
+  jsonlite::write_json(
+    x = collection,
+    path = file.path(job_dir, "_collection.json"),
+    auto_unbox = TRUE
+  )
+}
+
 
 #' Get Supported File Formats
 #'
@@ -376,4 +477,32 @@ format_ext <- function(format) {
          json = ".json"
   )
 }
-
+#' @export
+ext_format <- function(filename) {
+  ext <- gsub("\\.([^.]+)$", "\\1", filename)
+  switch(ext,
+         tif = "gtiff",
+         nc = "netcdf",
+         rds = "rds",
+         json = "json"
+  )
+}
+#' @export
+ext_content_type <- function(filename) {
+  ext <- gsub("\\.([^.]+)$", "\\1", filename)
+  switch(ext,
+    tif = "image/tiff",
+    nc = "application/octet-stream",
+    rds = "application/rds",
+    json = "application/json",
+  )
+}
+#' @export
+format_content_type <- function(format) {
+  switch(format,
+         gtiff = "image/tiff",
+         netcdf = "application/octet-stream",
+         rds = "application/rds",
+         json = "application/json"
+  )
+}
