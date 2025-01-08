@@ -11,8 +11,10 @@
 \alias{api_landing_page}
 \alias{api_conformance}
 \alias{api_processes}
-\alias{api_jobs_list}
 \alias{api_result}
+\alias{api_jobs_list}
+\alias{api_job_info}
+\alias{api_job_create}
 \title{Handle API requests}
 \usage{
 \method{api_result}{openeo_v1}(api, req, res)
@@ -64,9 +66,13 @@ api_conformance(api, req)
 
 api_processes(api, req, check_auth = FALSE)
 
+api_result(api, req, res)
+
 api_jobs_list(api, req)
 
-api_result(api, req, res)
+api_job_info(api, req, job_id)
+
+api_job_create(api, req, res)
 }
 \arguments{
 \item{api}{An object representing the API. This object is typically
@@ -93,9 +99,22 @@ functions declared in \code{R/doc.R}. For more details, see the
 
 \item{description}{A character string describing the API.}
 
+\item{backend_version}{Version number of the back-end implementation.}
+
+\item{api_version}{Version number of the openEO specification this
+back-end implements.}
+
+\item{stac_api}{The version of the STAC specification, which may not
+be equal to the STAC API version.}
+
+\item{work_dir}{Specifies whether the implementation is ready to be
+used in production use (\code{TRUE}) or not (\code{FALSE}).}
+
 \item{conforms_to}{A character vector specifying the conformance
 standards adhered to by the API. This parameter can be NULL or
 contain additional conformance standards to add to the defaults.}
+
+\item{production}{description}
 
 \item{...}{Additional arguments to be passed to the method-specific
 functions.}
@@ -108,14 +127,19 @@ references below for more details.}
 \item{handle_errors}{A logical value indicating whether to handle
 errors using the \code{openeocraft} default error handler. Default is \code{TRUE}.}
 
+\item{api_base_url}{The openEO service root URL.}
+
 \item{spec_endpoint}{The endpoint where the API specification
 (OpenAPI) will be available. An \code{NULL} value disable this feature.}
 
 \item{docs_endpoint}{The endpoint where the API documentation
 (swagger) will be available. An \code{NULL} value disable this feature.}
 
-\item{collection_id}{The identifier of the collection. This parameter
-specifies which collection the request is targeting.}
+\item{wellknown_versions}{description}
+
+\item{check_auth}{Check for authenticated user (\code{TRUE}) or not (\code{FALSE}).}
+
+\item{job_id}{The identifier for the job}
 }
 \value{
 For API creation functions, returns a api object. For API

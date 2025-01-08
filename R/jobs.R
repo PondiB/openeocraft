@@ -1,8 +1,3 @@
-#' @import jsonlite
-#' @import callr
-#' @importFrom ids random_id
-
-
 # api_user_workspace(api, user) -> work_dir / <user>
 # work_dir / <user> / jobs.rds
 # work_dir / <user> / <job_id> /
@@ -37,8 +32,9 @@ job_crt_rds <- function(api, user, job) {
 }
 job_upd_status <- function(api, user, job_id, status) {
   jobs <- job_read_rds(api, user)
-  api_stopifnot(job_id %in% names(jobs), status = 500,
-                "Could not find sync job id")
+  if (!job_id %in% names(jobs)) {
+    api_stop(500, "Could not find sync job id")
+  }
   job <- jobs[[job_id]]
   job$status <- status
   job_save_rds(api, user, job, jobs)
@@ -53,7 +49,7 @@ job_delete_rds <- function(api, user, job, jobs) {
     api_stop(500, "Could not save the jobs index file")
   })
 }
-
+#' @export
 job_get_dir <- function(api, user, job_id) {
   file.path(api_user_workspace(api, user), "jobs", job_id)
 }
@@ -61,18 +57,21 @@ job_new_dir <- function(api, user, job) {
   job_dir <- job_get_dir(api, user, job$id)
   if (dir.exists(job_dir)) {
     unlink(job_dir, recursive = TRUE)
-    api_stopifnot(!dir.exists(job_dir), 500, "Could not delete the job ",
-                  job$id, "'s folder")
+    if (dir.exists(job_dir)) {
+      api_stop(500, "Could not delete the job ", job$id, "'s folder")
+    }
   }
   dir.create(job_dir, recursive = TRUE)
-  api_stopifnot(dir.exists(job_dir), 500, "Could not create the job ",
-                job$id, "'s folder")
+  if (!dir.exists(job_dir)) {
+    api_stop(500, "Could not create the job ", job$id, "'s folder")
+  }
 }
 job_del_dir <- function(api, user, job_id) {
   job_dir <- job_get_dir(api, user, job_id)
   unlink(job_dir, recursive = TRUE)
-  api_stopifnot(!dir.exists(job_dir), 500, "Could not delete the job ",
-                job_id, "'s folder")
+  if (dir.exists(job_dir)) {
+    api_stop(500, "Could not delete the job ", job_id, "'s folder")
+  }
 }
 
 procs_read_rds <- function(api) {
@@ -136,11 +135,11 @@ log_append <- function(api, user, job_id, code, level, message, ...) {
 #' @export
 job_create <- function(api, req, res, user, job) {
   # TODO: create job_check
-  #job_prepare(api, user, job)
+  # job_prepare(api, user, job)
   # - fill defaults
   # - check consistency of the provided fields
   # - also check plan
-  job_id <- ids::random_id()
+  job_id <- random_id()
   job <- list(
     id = job_id,
     title = job$title,
@@ -156,7 +155,6 @@ job_create <- function(api, req, res, user, job) {
   # TODO: create directory and job RDS file as an atomic transaction
   # create job's directory
   job_new_dir(api, user, job)
-
   # TODO: how to avoid concurrency issues on reading/writing?
   # use some specific package? e.g. filelock, sqllite?, mongodb?
   jobs <- job_read_rds(api, user)
@@ -167,9 +165,9 @@ job_create <- function(api, req, res, user, job) {
   res$status <- 201
   list()
 }
+#' @export
 job_sync <- function(api, req, user, job_id) {
   job <- job_upd_status(api, user, job_id, "running")
-
   run_pgraph(api, req, user, job, job$process)
   job_upd_status(api, user, job_id, "finished")
   return(NULL)
@@ -193,13 +191,16 @@ job_sync <- function(api, req, user, job_id) {
   })
 }
 job_async <- function(api, req, user, job_id) {
-  # proc <- callr::r_bg(
-  #   func = job_sync,
-  #   args = list(api, user, job_id)
-  # )
-  # proc
-  job_sync(api, req, user, job_id)
-  return(0)
+  job_dir <- job_get_dir(api, user, job_id)
+  proc <- callr::r_bg(
+    func = function(api, req, user, job_id) {
+      openeocraft::job_sync(api, req, user, job_id)
+    },
+    args = list(api, req, user, job_id),
+    stdout = file.path(job_dir, "_stdout.log"),
+    stderr = file.path(job_dir, "_stderr.log")
+  )
+  proc
 }
 #' Start a job asynchronously
 #'
@@ -215,10 +216,15 @@ job_start <- function(api, req, res, user, job_id) {
   if (!(job_id %in% names(jobs))) {
     api_stop(404, "Job not found")
   }
+  # TODO: get process from job_id
   procs <- procs_read_rds(api)
   if (!is.null(procs[[job_id]])) {
-    return(list(id = job_id, message = "Job already started", code = 200))
+    # TODO: check if there is another message to finished state!
+    if (procs[[job_id]]$is_alive() || jobs[[job_id]]$status == "finished") {
+      return(list(id = job_id, message = "Job already started", code = 200))
+    }
   }
+
   # TODO: implement queue: check for maximum number of workers
   # procs_alive(procs) -> manage process not alive
   # define in the api how many workers to start?
@@ -236,7 +242,6 @@ job_start <- function(api, req, res, user, job_id) {
 #' @param job_id The identifier for the job
 #' @export
 job_info <- function(api, user, job_id) {
-  job_id <- URLdecode(job_id)
   jobs <- job_read_rds(api, user)
 
   # Check if the job_id exists in the jobs_list
@@ -258,7 +263,6 @@ job_info <- function(api, user, job_id) {
 #' @export
 job_update <- function(api, user, job_id, job) {
   # TODO: all checks should be done in api_*() functions level
-  job_id <- URLdecode(job_id)
   # TODO: implement job_check partial parameter that does the check
   #   job fields independently.
   #job_check(job, partial = TRUE)
@@ -291,7 +295,6 @@ job_update <- function(api, user, job_id, job) {
 #' @param job_id The identifier for the job
 #' @export
 job_delete <- function(api, user, job_id) {
-  job_id <- URLdecode(job_id)
   jobs <- job_read_rds(api, user)
   # Check if the job_id exists in the jobs_list
   if (!(job_id %in% names(jobs))) {
@@ -303,21 +306,6 @@ job_delete <- function(api, user, job_id) {
   job_del_dir(api, user, job_id)
   list(message = "Job deleted", code = 200, deleted_job = removed_job$id)
 }
-
-#' @export
-job_list_all <- function(api, user) {
-  jobs <- job_read_rds(api, user)
-  jobs <- list(
-    jobs = unname(lapply(jobs, \(job) {
-      job[c("id", "status", "created")]
-    })),
-    # TODO: populate this link with some function like we do in other endpoints
-    links = list()
-  )
-  jobs
-}
-
-
 # Get an estimate for a job
 #' @export
 job_estimate <- function(api, user, job_id) {
@@ -330,13 +318,16 @@ job_estimate <- function(api, user, job_id) {
 #' @export
 job_logs <- function(api, user, job_id, offset = 0, level = "info", limit = 10) {
   level_list <- c("error", "warning", "info", "debug")
-  job_id <- URLdecode(job_id)
   offset <- as.integer(offset)
   if (is.na(offset)) offset <- 0
-  api_stopifnot(level %in% level_list, 400, "level must be one of ",
-                paste0("'", level_list, "'", collapse = ", "))
+  if (!level %in% level_list) {
+    api_stop(400, "level must be one of ",
+             paste0("'", level_list, "'", collapse = ", "))
+  }
   limit <- as.integer(limit)
-  api_stopifnot(limit >= 1, 400, "limit parameter must be >= 1")
+  if (limit < 1) {
+    api_stop(400, "limit parameter must be >= 1")
+  }
   logs <- logs_read_rds(api, user, job_id)
   levels <- vapply(logs, \(log) log$level, character(1))
   selection <- match(levels, level_list) <= match(level, level_list)
@@ -360,10 +351,11 @@ job_get_results <- function(api, user, job_id) {
     api_stop(404, "No results found")
   }
   if (job$status != "finished") {
-    job_empty_collection(api, user, job)
+    return(job_empty_collection(api, user, job))
   }
   jsonlite::read_json(file.path(results_path, "_collection.json"))
 }
+#' @export
 job_empty_collection <- function(api, user, job) {
   collection <- list(
     `openeo:status` = job$status,
@@ -378,4 +370,9 @@ job_empty_collection <- function(api, user, job) {
     assets = list()
   )
   collection
+}
+job_info_check <- function(job_info) {
+  if (!all(c("title", "description", "process") %in% names(job_info))) {
+    api_stop(400, "Invalid job data")
+  }
 }

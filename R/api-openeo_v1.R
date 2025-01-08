@@ -105,7 +105,7 @@ api_conformance.openeo_v1 <- function(api, req) {
 api_processes.openeo_v1 <- function(api, req, check_auth = FALSE) {
   if (check_auth) {
     token <- req$header$token
-    token_user(api, token)
+    get_token_user(api, token)
   }
   procs <- api_attr(api, "processes")
   procs <- list(
@@ -113,17 +113,11 @@ api_processes.openeo_v1 <- function(api, req, check_auth = FALSE) {
   )
   procs
 }
-#' @export
-api_jobs_list.openeo_v1 <- function(api, req) {
-  token <- req$header$token
-  user <- token_user(api, token)
-  job_list_all(api, user)
-}
 #' @rdname api_handling
 #' @export
 api_result.openeo_v1 <- function(api, req, res) {
   token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
+  user <- get_token_user(api, token)
   pg <- req$body
 
   # TODO: create job_check
@@ -151,8 +145,10 @@ api_result.openeo_v1 <- function(api, req, res) {
   # use some specific package? e.g. filelock, sqllite?, mongodb?
   job_crt_rds(api, user, job)
   job_sync(api, req, user, job_id)
-  result_dir <- file.path(job_get_dir(api, user, job_id))
-  result_files <- list.files(result_dir, pattern = "^[^_]", full.names = TRUE)
+
+  # TODO: Test to see if the results are being returned correctly
+  job_dir <- job_get_dir(api, user, job_id)
+  result_files <- list.files(job_dir, pattern = "^[^_]", full.names = TRUE)
   if (length(result_files) == 1) {
     result <- structure(
       list(data = result_files),
@@ -160,10 +156,74 @@ api_result.openeo_v1 <- function(api, req, res) {
     )
     return(data_serializer(result, res))
   }
-  result_files <- list.files(result_dir, full.names = TRUE)
-  tar_file <- file.path(job_get_dir(api, user, job_id), "_files.tar")
+
+  # result_files <- list.files(result_dir, full.names = TRUE)
+  tar_file <- file.path(job_dir, "_files.tar")
+
+  # TODO: remove directory structure from the tar file
   utils::tar(tar_file, result_files)
   result <- structure(list(data = tar_file), class = "openeo_tar")
   data_serializer(result, res)
 }
-
+#' @export
+api_jobs_list.openeo_v1 <- function(api, req) {
+  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
+  user <- get_token_user(api, token)
+  jobs <- job_read_rds(api, user)
+  jobs <- list(
+    jobs = unname(lapply(jobs, \(job) {
+      job[c("id", "status", "created")]
+    })),
+    # TODO: populate this link with some function like we do in other endpoints
+    links = list()
+  )
+  jobs
+}
+#' @export
+api_job_info.openeo_v1 <- function(api, req, job_id) {
+  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
+  user <- get_token_user(api, token)
+  jobs <- job_read_rds(api, user)
+  # Check if the job_id exists in the jobs_list
+  if (!(job_id %in% names(jobs))) {
+    api_stop(404, "Job not found")
+  }
+  # Retrieve the job from the jobs_list
+  job <- jobs[[job_id]]
+  # TODO: populate links?
+  job
+}
+#' @export
+api_job_create.openeo_v1 <- function(api, req, res) {
+  token <- get_token(req)
+  user <- get_token_user(api, token)
+  job_info <- req$body
+  # TODO: create job_check
+  #job_info_check(job_info)
+  job_id <- random_id(16L)
+  job <- list(
+    id = job_id,
+    title = job_info$title,
+    description = job_info$description,
+    process = job_info$process,
+    status = "created",
+    created = Sys.time(),
+    plan = job_info$plan,
+    budget = job_info$budget,
+    log_level = job_info$log_level,
+    links = list()
+  )
+  # TODO: create directory and job RDS file as an atomic transaction
+  # create job's directory
+  job_new_dir(api, user, job)
+  # TODO: how to avoid concurrency issues on reading/writing?
+  # use some specific package? e.g. filelock, sqllite?, mongodb?
+  jobs <- job_read_rds(api, user)
+  job_save_rds(api, user, job, jobs)
+  # Set HTTP headers
+  host <- get_host(api, req)
+  res$setHeader("Location", make_url(host, "/jobs/", job_id))
+  res$setHeader("OpenEO-Identifier", job_id)
+  res$status <- 201
+  list()
+}

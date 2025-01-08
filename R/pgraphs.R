@@ -15,7 +15,7 @@ is_pgraph <- function(pg) {
     return(FALSE)
   if (!all(vapply(pg$process_graph, is_pnode, logical(1))))
     return(FALSE)
-  if (base::sum(vapply(pg$process_graph, pgraph_result, logical(1))) != 1)
+  if (sum(vapply(pg$process_graph, pgraph_result, logical(1))) != 1)
     return(FALSE)
   return(TRUE)
 }
@@ -103,13 +103,4 @@ pgraph_fn <- function(pg, parent = NULL) {
   par <- pgraph_params(pg)
   expr <- pgraph_expr(pg, parent = parent)
   make_fn(par, body = expr, env = parent.frame())
-}
-
-run_pgraph <- function(api, req, user, job, pg) {
-  if ("process" %in% names(pg))
-    pg <- pg$process
-  expr <- pgraph_expr(pg)
-  # TODO: need to define a scope with api and user objects
-  eval(expr, envir = list(api = api, user = user, job = job, req = req),
-       enclos = get_namespace(api))
 }

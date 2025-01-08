@@ -8,11 +8,12 @@
 # Load libraries
 library(openeocraft)
 library(plumber)
-#library(promises)
-#library(future)
+# library(promises)
+# library(coro)
 
 # Set number of processes to serve the API
-#future::plan(future::multisession(workers = 2))
+# future::plan("multisession")
+async <- function(x) x
 
 # Create an STAC server API object
 stac_api <- openstac::create_stac(
@@ -26,14 +27,14 @@ stac_api <- openstac::create_stac(
 )
 
 # Set API database
-file <- system.file("sits/sits.rds", package = "openeocraft")
+file <- system.file("ml/db.rds", package = "openeocraft")
 stac_api <- openstac::set_db(stac_api, driver = "local", file = file)
 
 # Create openEO API object
 api <- create_openeo_v1(
-  id = "openeo-sits",
-  title = "openEO backend for sits",
-  description = "This is an openEO compliant R backend for sits package.",
+  id = "openeocraft",
+  title = "openEO compliant R backend",
+  description = "OpenEOcraft offers a robust R framework designed for the development and deployment of openEO API applications.",
   backend_version = "0.2.0",
   stac_api = stac_api,
   work_dir = "~/openeo-tests",
@@ -41,12 +42,13 @@ api <- create_openeo_v1(
   production = FALSE
 )
 
+#set_credentials(api, file = "~/openeo-tests/openeo-credentials.rds")
 set_credentials(api, file = "~/openeo-credentials.rds")
 new_credential(api, user = "rolf", password = "123456")
 new_credential(api, user = "brian", password = "123456")
 
 # Load processes
-processes_file <- system.file("sits/processes.R", package = "openeocraft")
+processes_file <- system.file("ml/processes.R", package = "openeocraft")
 load_processes(api, processes_file)
 
 #* Enable Cross-origin Resource Sharing
@@ -57,156 +59,155 @@ function(req, res) {
 
 #* HTTP Basic authentication
 #* @get /credentials/basic
-function(req, res) {
+async(function(req, res) {
   api_credential(api, req, res)
-}
+})
 
 #* Lists api processes
 #* @serializer unboxedJSON
 #* @get /conformance
-function(req, res) {
+async(function(req, res) {
   print("conformance")
   api_conformance(api, req)
-}
+})
 
 #* Basic metadata for all datasets
 #* @serializer unboxedJSON
 #* @get /collections
-function(req, res) {
+async(function(req, res) {
   print("collections")
   openstac::api_collections(api$stac_api, req)
-}
+})
 
 #* Full metadata for a specific dataset
 #* @param collection_id Collection identifier
 #* @serializer unboxedJSON
 #* @get /collections/<collection_id>
-function(req, res, collection_id) {
+async(function(req, res, collection_id) {
   print("collections/<col_id>")
   doc <- openstac::api_collection(api$stac_api, collection_id, req)
-  delete_link(doc, rel = "item")
-}
+  doc <- delete_link(doc, rel = "item")
+  doc
+})
 
 #* Lists api processes
 #* @serializer unboxedJSON
 #* @get /processes
-function(req, res) {
+async(function(req, res) {
   print("processes")
-  api_processes(api, req, check_auth = FALSE)
-}
+  doc <- api_processes(api, req, check_auth = FALSE)
+  doc
+})
 
 #* Process and download data synchronously
 #* @post /result
-function(req, res) {
+async(function(req, res) {
   print("result")
-  api_result(api, req, res)
-}
+  doc <- api_result(api, req, res)
+  doc
+})
 
 #* List all batch jobs
 #* @serializer unboxedJSON
 #* @get /jobs
-function(req, res) {
+async(function(req, res) {
   print("GET /jobs")
-  api_jobs_list(api, req)
-}
+  doc <- api_jobs_list(api, req)
+  doc
+})
 
 #* Get batch job metadata
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @get /jobs/<job_id:str>
-function(req, res, job_id) {
+async(function(req, res, job_id) {
   print("GET /jobs/<jobid>")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
-  job_info(api, user, job_id)
-}
+  doc <- api_job_info(api, req, job_id)
+  doc
+})
 
 #* Create a new batch job
 #* @serializer unboxedJSON
 #* @post /jobs
-function(req, res) {
+async(function(req, res) {
   print("POST /jobs")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
-  job <- req$body
-  job_create(api, req, res, user, job)
-}
+  api_job_create(api, req, res)
+})
 
 #* Delete a batch job
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @delete /jobs/<job_id:str>
-function(req, res, job_id) {
+async(function(req, res, job_id) {
   print("DELETE /jobs/<jobid>")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
+  token <- get_token(req)
+  user <- get_token_user(api, token)
   job_delete(api, user, job_id)
-}
+})
 
 #* Update a batch job
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @patch /jobs/<job_id:str>
-function(req, res, job_id) {
+async(function(req, res, job_id) {
   print("PATCH /jobs/<jobid>")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
+  token <- get_token(req)
+  user <- get_token_user(api, token)
   job <- req$body
   job_update(api, user, job_id, job)
-}
+})
 
 #* Start a batch job
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @post /jobs/<job_id:str>/results
-function(req, res, job_id) {
+async(function(req, res, job_id) {
   print("POST /jobs/<jobid>/results")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
+  token <- get_token(req)
+  user <- get_token_user(api, token)
   job_start(api, req, res, user, job_id)
-}
+})
 
 #* Start a batch job
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @get /jobs/<job_id:str>/results
-function(req, res, job_id) {
+async(function(req, res, job_id) {
   print("GET /jobs/<jobid>/results")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
+  token <- get_token(req)
+  user <- get_token_user(api, token)
   job_get_results(api, user, job_id)
-}
+})
 
 #* Get an estimate for a batch job
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @get /jobs/<job_id>/estimate
-function(req, res, job_id) {
+async(function(req, res, job_id) {
   print("GET /jobs/<jobid>/estimate")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
-  job_id <- URLdecode(job_id)
+  token <- get_token(req)
+  user <- get_token_user(api, token)
   job_estimate(api, user, job_id)
-}
+})
 
 #* Logs for a batch job
 #* @param job_id job identifier
 #* @serializer unboxedJSON
 #* @get /jobs/<job_id>/logs
-function(req, res, job_id, offset, level, limit) {
+async(function(req, res, job_id, offset, level, limit) {
   print("GET /jobs/<jobid>/logs")
-  token <- gsub("^.*//", "", req$HTTP_AUTHORIZATION)
-  user <- token_user(api, token)
+  token <- get_token(req)
+  user <- get_token_user(api, token)
   job_logs(api, user, job_id, offset, level, limit)
-}
+})
 
 #* List supported file formats
 #* @serializer unboxedJSON
 #* @get /file_formats
-function(req, res) {
+async(function(req, res) {
   print("file_formats")
   file_formats()
-}
+})
 
 # NOTE:
 #  this must be placed after endpoints to be shown in
@@ -229,20 +230,21 @@ function(pr) {
 #* Information about the back-end
 #* @serializer unboxedJSON
 #* @get /
-function(req, res) {
+async(function(req, res) {
   api_landing_page(api, req)
-}
+})
 
 #* Information about the back-end
 #* @serializer unboxedJSON
 #* @get /.well-known/openeo
-function(req, res) {
+async(function(req, res) {
   api_wellknown(api, req)
-}
+})
 
-#* Workspace files handling
+#* Workspace job files handling
 #* @get /files/jobs/<job_id>/<asset>
-function(req, res, job_id, asset) {
+async(function(req, res, job_id, asset) {
+  print("GET /files/jobs/<jobid>/<asset>")
   file <- gsub("^([^?]+)?", "\\1", asset)
   if (!"token" %in% names(req$args)) {
     api_stop(401, "URL token parameter is missing")
@@ -250,8 +252,29 @@ function(req, res, job_id, asset) {
   token <- req$args$token
   user <- rawToChar(base64enc::base64decode(token))
   path <- file.path(api_user_workspace(api, user), "jobs", job_id, file)
-  api_stopifnot(file.exists(path), status = 404,
-                "File not found")
+  if (!file.exists(path)) {
+    api_stop(404, "File not found")
+  }
   res$setHeader("Content-Type", ext_content_type(path))
   res$body <- readBin(path, what = "raw", n = file.info(path)$size)
-}
+  res
+})
+
+#* Workspace root files handling
+#* @get /files/root/<folder>/<asset>
+async(function(req, res, folder, asset) {
+  print("GET /files/root/<folder>/<asset>")
+  file <- gsub("^([^?]+)?", "\\1", asset)
+  if (!"token" %in% names(req$args)) {
+    api_stop(401, "URL token parameter is missing")
+  }
+  token <- req$args$token
+  user <- rawToChar(base64enc::base64decode(token))
+  path <- file.path(api_user_workspace(api, user), "root", folder, file)
+  if (!file.exists(path)) {
+    api_stop(404, "File not found")
+  }
+  res$setHeader("Content-Type", ext_content_type(path))
+  res$body <- readBin(path, what = "raw", n = file.info(path)$size)
+  res
+})
