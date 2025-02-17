@@ -2,7 +2,7 @@ library(openeo)
 library(sits)
 
 # Connect to the backend
-con <- connect("http://127.0.0.1:8000", user = "brian", password = "123456")
+con <- connect("http://127.0.0.1:8000", user = "rolf", password = "123456")
 
 # Access processes
 p <- processes()
@@ -13,16 +13,21 @@ rf_model_definition <- p$mlm_class_random_forest(
   random_state = 42
 )
 
+# Load sits tibble Training data
+data_deforestation_rondonia <- readRDS("./inst/examples/filtered_rondonia_data.rds")
+
+
+
 # Fit the model using the training dataset
 rf_model_fitted <- p$ml_fit(
   model = rf_model_definition,
-  training_set = jsonlite::serializeJSON(sits::samples_modis_ndvi)
+  training_set = jsonlite::serializeJSON(data_deforestation_rondonia)
 )
 
 # Export the trained model
 rf_model <- p$export_model(
   model = rf_model_fitted,
-  name = "rf_model_12_12_24",
+  name = "rf_model_15_01_25",
   folder = "openeocraft-models"
 )
 
@@ -35,5 +40,4 @@ job <- create_job(
 job <- start_job(job)
 
 # Display job information
-job
 describe_job(job)

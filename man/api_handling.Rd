@@ -14,7 +14,10 @@
 \alias{api_result}
 \alias{api_jobs_list}
 \alias{api_job_info}
+\alias{api_job_delete}
 \alias{api_job_create}
+\alias{api_job_start}
+\alias{api_file_formats}
 \title{Handle API requests}
 \usage{
 \method{api_result}{openeo_v1}(api, req, res)
@@ -58,21 +61,27 @@ api_setup_plumber(
 
 api_credential(api, req, res)
 
-api_wellknown(api, req)
+api_wellknown(api, req, res)
 
-api_landing_page(api, req)
+api_landing_page(api, req, res)
 
-api_conformance(api, req)
+api_conformance(api, req, res)
 
-api_processes(api, req, check_auth = FALSE)
+api_processes(api, req, res, check_auth = FALSE)
 
 api_result(api, req, res)
 
-api_jobs_list(api, req)
+api_jobs_list(api, req, res)
 
-api_job_info(api, req, job_id)
+api_job_info(api, req, res, job_id)
+
+api_job_delete(api, req, res, job_id)
 
 api_job_create(api, req, res)
+
+api_job_start(api, req, res, job_id)
+
+api_file_formats(api, req, res)
 }
 \arguments{
 \item{api}{An object representing the API. This object is typically
