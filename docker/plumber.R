@@ -8,6 +8,16 @@
 # Load libraries
 library(openeocraft)
 library(plumber)
+
+# Increase request body size limit (100MB) to handle large payloads
+# such as serialized training datasets in process graphs
+options(plumber.maxRequestSize = 1024 * 1024 * 100)
+
+# Increase curl/httr timeouts for large data transfers
+options(timeout = 600) # 10 minutes for base R connections
+if (requireNamespace("httr", quietly = TRUE)) {
+  httr::set_config(httr::config(connecttimeout = 60, timeout = 600))
+}
 # library(promises)
 # library(coro)
 
@@ -48,7 +58,30 @@ new_credential(api, user = "brian", password = "123456")
 new_credential(api, user = "user", password = "password")
 
 # Load processes
-processes_file <- system.file("ml/processes.R", package = "openeocraft")
+# When running locally (Rscript docker/server.R), load from source for easier development
+# When running in Docker, load from installed package
+
+# Try multiple paths to find the source file
+local_paths <- c(
+  "inst/ml/processes.R", # From repo root
+  "../inst/ml/processes.R" # From docker/ directory
+)
+
+processes_file <- NULL
+for (path in local_paths) {
+  if (file.exists(path)) {
+    processes_file <- path
+    cat("Loading processes from source:", normalizePath(path), "\n")
+    break
+  }
+}
+
+# Fallback to installed package
+if (is.null(processes_file)) {
+  processes_file <- system.file("ml/processes.R", package = "openeocraft")
+  cat("Loading processes from package:", processes_file, "\n")
+}
+
 load_processes(api, processes_file)
 
 #* Enable Cross-origin Resource Sharing
@@ -288,6 +321,27 @@ function(req, res, folder, asset) {
   token <- req$args$token
   user <- rawToChar(base64enc::base64decode(token))
   path <- file.path(api_user_workspace(api, user), "root", folder, file)
+  if (!file.exists(path)) {
+    api_stop(404L, "File not found")
+  }
+  res$setHeader("Content-Type", ext_content_type(path))
+  if (get_method(req) == "HEAD") {
+    res$status <- 200L
+  } else {
+    res$body <- readBin(path, what = "raw", n = file.info(path)$size)
+  }
+  res
+}
+
+#* Public workspace files handling (no token)
+#*  e.g. http://127.0.0.1:8000/files/public/<job_id>/models/tempcnn_rondonia.rds
+#* @head /files/public/<folder>/<asset>
+#* @get /files/public/<folder>/<asset>
+function(req, res, folder, asset) {
+  print("GET /files/public/<folder>/<asset>")
+  file <- gsub("^([^?]+)?", "\\1", asset)
+  public_dir <- openeocraft::api_user_workspace(api, "public")
+  path <- file.path(public_dir, folder, file)
   if (!file.exists(path)) {
     api_stop(404L, "File not found")
   }
