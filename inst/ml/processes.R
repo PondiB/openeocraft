@@ -3,33 +3,727 @@
 #* @openeo-import data.R
 
 # Internal helpers -------------------------------------------------------
-# Use one fewer than total physical cores (fallback to 2) but never more than 16.
+# Resource use: by default use openeocraft.resource_fraction (default 0.75) of
+# detected physical CPU cores and, when openeocraft.memsize is unset, of total
+# RAM. Override explicitly with options(openeocraft.memsize = 16L) and/or
+# options(openeocraft.memsize_auto = FALSE) to restore a fixed 8 GB fallback.
+# options(openeocraft.multicores_max = 32L) raises the worker cap (default 16).
+#
+# Developer documentation in this file uses Google-style blocks (summary,
+# Args, Returns, Raises) in `#` comments. openEO-facing text remains in `#*`
+# decorators where present. Indentation matches package `R/` code (4 spaces).
+
+# Fraction of machine resources (CPU/RAM) openeocraft may use for workers.
+#
+# Args:
+#   (none)
+#
+# Returns:
+#   Numeric scalar in [0.05, 1], from getOption("openeocraft.resource_fraction")
+#   or 0.75 when unset/invalid.
+.openeocraft_resource_fraction <- function() {
+    f <- base::getOption("openeocraft.resource_fraction", 0.75)
+    if (!base::is.numeric(f) || base::length(f) != 1L || base::is.na(f)) {
+        return(0.75)
+    }
+    f <- base::as.numeric(f)
+    base::min(1, base::max(0.05, f))
+}
+
+# Total system RAM in gigabytes (best effort across OS APIs).
+#
+# Args:
+#   (none)
+#
+# Returns:
+#   Non-negative numeric GB, or NA_real_ if detection fails.
+.openeocraft_sys_total_ram_gb <- function() {
+    if (base::getRversion() >= "4.4.0" &&
+        base::exists("Sys.meminfo", mode = "function")) {
+        mi <- base::tryCatch(base::Sys.meminfo(), error = function(...) {
+            NULL
+        })
+        if (!base::is.null(mi)) {
+            tr <- mi[["totalram"]]
+            if (base::is.null(tr)) {
+                tr <- mi[["total"]]
+            }
+            if (!base::is.null(tr) && base::is.numeric(tr) && tr > 0) {
+                return(base::as.numeric(tr) / (1024^3))
+            }
+        }
+    }
+    if (base::.Platform$OS.type == "unix" &&
+        base::file.exists("/proc/meminfo")) {
+        lines <- base::readLines("/proc/meminfo", n = 30L, warn = FALSE)
+        idx <- base::grep("^MemTotal:", lines)
+        if (base::length(idx) >= 1L) {
+            parts <- base::strsplit(lines[[idx[[1]]]], "[: \t]+")[[1]]
+            parts <- parts[parts != ""]
+            if (base::length(parts) >= 2L) {
+                kb <- base::suppressWarnings(base::as.numeric(parts[[2]]))
+                if (!base::is.na(kb)) {
+                    return(kb / (1024^2))
+                }
+            }
+        }
+    }
+    if (base::Sys.info()[["sysname"]] == "Darwin") {
+        sysctl <- base::Sys.which("sysctl")
+        if (base::nzchar(sysctl)) {
+            out <- base::tryCatch(
+                base::system2(
+                    sysctl,
+                    args = "-n hw.memsize",
+                    stdout = TRUE,
+                    stderr = FALSE
+                ),
+                warning = function(...) {
+                    NULL
+                },
+                error = function(...) {
+                    NULL
+                }
+            )
+            if (!base::is.null(out) && base::length(out) >= 1L) {
+                b <- base::suppressWarnings(base::as.numeric(out[[1]]))
+                if (!base::is.na(b)) {
+                    return(b / (1024^3))
+                }
+            }
+        }
+    }
+    NA_real_
+}
+
+# Parallel worker count capped by resource fraction and multicores_max option.
+#
+# Args:
+#   (none)
+#
+# Returns:
+#   Positive integer; at least 1, at most getOption("openeocraft.multicores_max", 16L).
 .openeocraft_multicores <- function() {
+    frac <- .openeocraft_resource_fraction()
     cores <- base::tryCatch(
         parallel::detectCores(logical = FALSE),
         error = function(...) {
             NA_integer_
         }
     )
-    cores <- if (base::is.na(cores) || !base::is.numeric(cores)) {
-        2L
-    } else {
-        base::max(1L, cores - 1L)
+    if (base::is.na(cores) || !base::is.numeric(cores) || cores < 1L) {
+        cores <- 2L
     }
-    base::as.integer(base::min(cores, 16L))
+    usable <- base::max(1L, base::as.integer(base::floor(cores * frac)))
+    cap <- base::getOption("openeocraft.multicores_max", 16L)
+    if (!base::is.numeric(cap) || base::length(cap) != 1L || base::is.na(cap)) {
+        cap <- 16L
+    }
+    if (!base::is.finite(cap)) {
+        return(usable)
+    }
+    cap <- base::as.integer(cap)
+    if (base::is.na(cap) || cap < 1L) {
+        cap <- 16L
+    }
+    base::as.integer(base::min(usable, cap))
 }
 
-# Default memory (GB) for sits processing; can be overridden via option
-# options(openeocraft.memsize = 8L)
+# Memory budget in GB for sits/torch-style operations.
+#
+# Args:
+#   (none)
+#
+# Returns:
+#   Integer GB: explicit openeocraft.memsize, or auto from total RAM * fraction,
+#   or 8 when auto is off or detection fails (clamped to [1, 256] when auto).
 .openeocraft_memsize <- function() {
-    mem <- base::getOption("openeocraft.memsize", 8L)
-    if (!base::is.numeric(mem) ||
-        base::length(mem) != 1 || base::is.na(mem)) {
-        mem <- 8L
+    explicit <- base::getOption("openeocraft.memsize", NULL)
+    if (!base::is.null(explicit)) {
+        mem <- explicit
+        if (!base::is.numeric(mem) ||
+            base::length(mem) != 1L || base::is.na(mem)) {
+            mem <- 8L
+        }
+        return(base::as.integer(base::max(1L, mem)))
     }
-    base::as.integer(base::max(1L, mem))
+    if (!base::isTRUE(base::getOption("openeocraft.memsize_auto", TRUE))) {
+        return(8L)
+    }
+    total_gb <- .openeocraft_sys_total_ram_gb()
+    if (base::is.na(total_gb) || total_gb <= 0) {
+        return(8L)
+    }
+    frac <- .openeocraft_resource_fraction()
+    gb <- base::floor(total_gb * frac)
+    base::as.integer(base::max(1L, base::min(gb, 256L)))
 }
 
+# Load training/validation samples from URL (RDS), JSON, local RDS path, or pass-through.
+#
+# Args:
+#   x: Character (URL/path/JSON) or already-deserialized R object.
+#   param_name: Name used in error messages (default "training_data").
+#   wrap_io_errors: If TRUE, download/read errors become stop() with context.
+#
+# Returns:
+#   The loaded or passthrough R object.
+#
+# Raises:
+#   stop() if x is an invalid empty string, or not a loadable URL/file/JSON;
+#   optional I/O messages when wrap_io_errors is TRUE.
+.openeocraft_load_samples <- function(x,
+                                      param_name = "training_data",
+                                      wrap_io_errors = FALSE) {
+    if (!base::is.character(x) || base::length(x) != 1L) {
+        return(x)
+    }
+    if (base::any(base::is.na(x)) || !base::nzchar(x)) {
+        stop(
+            base::paste0(param_name, " must be a non-missing, non-empty string when given as text"),
+            call. = FALSE
+        )
+    }
+    err <- base::paste0(
+        param_name,
+        " must be a URL to RDS, a local RDS path, a JSON-serialized object, or an object"
+    )
+    if (base::isTRUE(base::grepl("^https?://", x))) {
+        tmp <- base::tempfile(fileext = ".rds")
+        base::on.exit(base::unlink(tmp), add = TRUE)
+        if (wrap_io_errors) {
+            return(base::tryCatch(
+                {
+                    utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
+                    base::readRDS(tmp)
+                },
+                error = function(e) {
+                    stop(
+                        base::sprintf(
+                            "Failed to download/read %s from URL: %s",
+                            param_name,
+                            e$message
+                        ),
+                        call. = FALSE
+                    )
+                }
+            ))
+        }
+        utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
+        return(base::readRDS(tmp))
+    }
+    json_obj <- base::tryCatch(
+        jsonlite::unserializeJSON(x),
+        error = function(...) {
+            NULL
+        }
+    )
+    if (!base::is.null(json_obj)) {
+        return(json_obj)
+    }
+    if (base::file.exists(x)) {
+        if (wrap_io_errors) {
+            return(base::tryCatch(
+                base::readRDS(x),
+                error = function(e) {
+                    stop(
+                        base::sprintf(
+                            "Failed to read %s from file: %s",
+                            param_name,
+                            e$message
+                        ),
+                        call. = FALSE
+                    )
+                }
+            ))
+        }
+        return(base::readRDS(x))
+    }
+    stop(err, call. = FALSE)
+}
+
+# Wrap sits_train with start/finish messages and elapsed wall time.
+#
+# sits/torch often drives txtProgressBar to stderr; openEO job logs may show long
+# gaps between lines while those bars stream elsewhere.
+#
+# Args:
+#   training_set: sits samples object passed to sits::sits_train.
+#   sits_ml_model: Model specification from sits::*_class constructors.
+#   log_label: Prefix for message lines (e.g. process name).
+#
+# Returns:
+#   Return value of sits::sits_train.
+#
+# Raises:
+#   Propagates errors from sits::sits_train.
+.openeocraft_sits_train_logged <- function(training_set, sits_ml_model, log_label) { # nolint
+    t0 <- base::Sys.time()
+    base::message(
+        "[",
+        log_label,
+        "] sits_train: starting (CPU torch training can take many minutes; ",
+        "progress bars earlier in the job usually come from collection load / regularize, not this step)." # nolint
+    )
+    out <- sits::sits_train(training_set, sits_ml_model)
+    secs <- base::as.numeric(base::difftime(base::Sys.time(), t0, units = "secs"))
+    dur <- if (!base::is.na(secs) && secs >= 120) {
+        base::paste0(base::round(secs / 60, 1), " min")
+    } else if (!base::is.na(secs)) {
+        base::paste0(base::round(secs, 1), " s")
+    } else {
+        "?"
+    }
+    base::message("[", log_label, "] sits_train: finished in ", dur)
+    out
+}
+
+# Single-row data.frame of overall accuracy metrics from sits or caret objects.
+#
+# Args:
+#   x: sits_accuracy, confusionMatrix, or object coercible via sits::sits_accuracy.
+#
+# Returns:
+#   data.frame with one row of overall metrics, or empty data.frame if none.
+.openeocraft_accuracy_summary_df <- function(x) {
+    acc <- if (base::inherits(x, "sits_accuracy") || base::inherits(x, "confusionMatrix")) {
+        x
+    } else {
+        sits::sits_accuracy(x)
+    }
+    overall <- acc[["overall"]]
+    if (base::is.null(overall)) {
+        return(base::data.frame())
+    }
+    base::as.data.frame(base::t(overall), stringsAsFactors = FALSE)
+}
+
+# Map param_grid/parameter optimizer name strings to torch optim functions in ml_args.
+#
+# Args:
+#   param_set: Named list; may contain character "optimizer".
+#   ml_args: Model argument list to receive optimizer function.
+#   optimizer_context: "param_grid" or "parameters" (for error messages).
+#
+# Returns:
+#   list(param_set, ml_args) with optimizer consumed from param_set when known.
+#
+# Raises:
+#   openeocraft::api_stop(400) if optimizer string is unsupported.
+.openeocraft_tune_map_optimizer_param <- function(param_set, ml_args, optimizer_context) {
+    optimizer_context <- base::match.arg(optimizer_context, c("param_grid", "parameters"))
+    if (base::is.null(param_set$optimizer)) {
+        return(list(param_set = param_set, ml_args = ml_args))
+    }
+    if (!base::is.character(param_set$optimizer)) {
+        return(list(param_set = param_set, ml_args = ml_args))
+    }
+    optimizer_fn <- base::switch(param_set$optimizer,
+        "adam" = torch::optim_adamw,
+        "adabound" = torch::optim_adabound,
+        "adabelief" = torch::optim_adabelief,
+        "madagrad" = torch::optim_madagrad,
+        "nadam" = torch::optim_nadam,
+        "qhadam" = torch::optim_qhadam,
+        "radam" = torch::optim_radam,
+        "swats" = torch::optim_swats,
+        "yogi" = torch::optim_yogi,
+        NULL
+    )
+    if (base::is.null(optimizer_fn)) {
+        unsupported_msg <- if (optimizer_context == "param_grid") {
+            "Unsupported optimizer in param_grid."
+        } else {
+            "Unsupported optimizer in parameters."
+        }
+        openeocraft::api_stop(400, unsupported_msg)
+    }
+    ml_args$optimizer <- optimizer_fn
+    param_set$optimizer <- NULL
+    list(param_set = param_set, ml_args = ml_args)
+}
+
+# Move learning_rate/lr/epsilon/weight_decay from param_set into ml_args$opt_hparams.
+#
+# Args:
+#   param_set: Named list of hyperparameters for one grid/random draw.
+#   ml_args: Model args list containing opt_hparams list or NULL.
+#
+# Returns:
+#   list(param_set, ml_args) with recognized keys removed from param_set.
+.openeocraft_tune_map_opt_hparams <- function(param_set, ml_args) {
+    if (base::is.null(ml_args$opt_hparams) || !base::is.list(ml_args$opt_hparams)) {
+        return(list(param_set = param_set, ml_args = ml_args))
+    }
+    opt_map <- list(
+        learning_rate = "lr",
+        lr = "lr",
+        epsilon = "eps",
+        eps = "eps",
+        weight_decay = "weight_decay"
+    )
+    for (name in base::names(opt_map)) {
+        if (!base::is.null(param_set[[name]])) {
+            ml_args$opt_hparams[[opt_map[[name]]]] <- param_set[[name]]
+            param_set[[name]] <- NULL
+        }
+    }
+    list(param_set = param_set, ml_args = ml_args)
+}
+
+# Map Random Forest max_variables grid key to sits mtry in ml_args.
+#
+# Args:
+#   param_set: May contain max_variables.
+#   ml_args: Receives mtry when max_variables is set.
+#
+# Returns:
+#   list(param_set, ml_args).
+.openeocraft_tune_map_rf_params <- function(param_set, ml_args) {
+    if (!base::is.null(param_set$max_variables)) {
+        ml_args$mtry <- param_set$max_variables
+        param_set$max_variables <- NULL
+    }
+    list(param_set = param_set, ml_args = ml_args)
+}
+
+# Evaluate expr with CUDA/MPS disabled and torch availability stubs forced off.
+#
+# Args:
+#   expr: Unevaluated expression (typically a validation call).
+#
+# Returns:
+#   Value of force(expr).
+#
+# Raises:
+#   Propagates errors from expr; may fail if torch namespace bindings change.
+.openeocraft_tune_with_force_cpu <- function(expr) {
+    base::Sys.setenv(CUDA_VISIBLE_DEVICES = "")
+    base::Sys.setenv(TORCH_DISABLE_MPS = "1")
+    base::Sys.setenv(TORCH_USE_MPS_FALLBACK = "1")
+    if (!base::requireNamespace("torch", quietly = TRUE)) {
+        return(base::force(expr))
+    }
+    torch_ns <- base::asNamespace("torch")
+    override <- function(name, replacement) {
+        if (!base::exists(name, envir = torch_ns, inherits = FALSE)) {
+            return(NULL)
+        }
+        locked <- base::bindingIsLocked(name, torch_ns)
+        if (locked) {
+            base::unlockBinding(name, torch_ns)
+        }
+        original <- base::get(name, envir = torch_ns)
+        base::assign(name, replacement, envir = torch_ns)
+        if (locked) {
+            base::lockBinding(name, torch_ns)
+        }
+        list(name = name, original = original, locked = locked)
+    }
+    restore <- function(info) {
+        if (base::is.null(info)) {
+            return(base::invisible(NULL))
+        }
+        if (info$locked) {
+            base::unlockBinding(info$name, torch_ns)
+        }
+        base::assign(info$name, info$original, envir = torch_ns)
+        if (info$locked) {
+            base::lockBinding(info$name, torch_ns)
+        }
+        base::invisible(NULL)
+    }
+    cuda_info <- override("cuda_is_available", function() FALSE)
+    mps_info <- override("backends_mps_is_available", function() FALSE)
+    base::on.exit(
+        {
+            restore(cuda_info)
+            restore(mps_info)
+        },
+        add = TRUE
+    )
+    base::force(expr)
+}
+
+# Run sits_validate or sits_kfold_validate depending on cv.
+#
+# Args:
+#   ml_method: Fitted ml method from sits.
+#   training_obj: Sample data.frame.
+#   cv: Fold count; if NULL or <= 1, uses validation_split path.
+#   validation_split: Passed to sits_validate when cv <= 1.
+#
+# Returns:
+#   Accuracy/validation object from sits.
+.openeocraft_tune_run_validation <- function(ml_method, training_obj, cv, validation_split) {
+    if (base::is.null(cv) || cv <= 1) {
+        return(sits::sits_validate(
+            samples = training_obj,
+            validation_split = validation_split,
+            ml_method = ml_method
+        ))
+    }
+    sits::sits_kfold_validate(
+        samples = training_obj,
+        folds = cv,
+        ml_method = ml_method,
+        multicores = .openeocraft_multicores(),
+        progress = FALSE
+    )
+}
+
+# Evaluate each hyperparameter combination with validation and collect metrics.
+#
+# Args:
+#   model: openEO ML model list (ml_method, ml_args, train, ...).
+#   training_obj: Loaded sample data.
+#   param_sets: List of named lists, each one hyperparameter combination.
+#   cv, validation_split: Passed to validation helper.
+#   scoring: Metric name (lowercase) to read from summary_df columns.
+#   log_msg: Function(...) for progress logging.
+#   optimizer_context: "param_grid" or "parameters" for optimizer mapping.
+#
+# Returns:
+#   List of lists, each c(param_set, list(metric = numeric)).
+#
+# Raises:
+#   stop() on validation errors except GPU memory, which retries with CPU;
+#   openeocraft::api_stop from optimizer mapping.
+.openeocraft_tune_evaluate_param_sets <- function(model,
+                                                  training_obj,
+                                                  param_sets,
+                                                  cv,
+                                                  validation_split,
+                                                  scoring,
+                                                  log_msg,
+                                                  optimizer_context) {
+    metric_key <- base::tolower(scoring)
+    total_sets <- base::length(param_sets)
+    results <- list()
+    for (i in base::seq_along(param_sets)) {
+        param_set <- param_sets[[i]]
+        param_set_raw <- param_set
+        start_time <- base::Sys.time()
+        mapped <- .openeocraft_tune_map_optimizer_param(
+            param_set,
+            model$ml_args,
+            optimizer_context
+        )
+        param_set <- mapped$param_set
+        base_args <- mapped$ml_args
+        mapped <- .openeocraft_tune_map_opt_hparams(param_set, base_args)
+        param_set <- mapped$param_set
+        base_args <- mapped$ml_args
+        mapped <- .openeocraft_tune_map_rf_params(param_set, base_args)
+        param_set <- mapped$param_set
+        base_args <- mapped$ml_args
+        merged_args <- utils::modifyList(base_args, param_set)
+        log_msg(
+            "Evaluating ",
+            i,
+            "/",
+            total_sets,
+            " with params: ",
+            jsonlite::toJSON(param_set_raw, auto_unbox = TRUE)
+        )
+        ml_method <- base::do.call(model$ml_method, merged_args)
+        acc_obj <- base::tryCatch(
+            .openeocraft_tune_run_validation(ml_method, training_obj, cv, validation_split),
+            error = function(e) {
+                if (base::grepl("GPU memory", e$message, ignore.case = TRUE)) {
+                    log_msg("GPU memory low, retrying with CPU settings.")
+                    return(
+                        .openeocraft_tune_with_force_cpu(
+                            .openeocraft_tune_run_validation(
+                                ml_method,
+                                training_obj,
+                                cv,
+                                validation_split
+                            )
+                        )
+                    )
+                }
+                stop(e)
+            }
+        )
+        summary_df <- .openeocraft_accuracy_summary_df(acc_obj)
+        metric_value <- NA_real_
+        if (base::is.data.frame(summary_df)) {
+            cols <- base::tolower(base::names(summary_df))
+            idx_col <- base::match(metric_key, cols)
+            if (!base::is.na(idx_col)) {
+                metric_value <- summary_df[[idx_col]][1]
+            } else {
+                numeric_cols <- base::vapply(summary_df, base::is.numeric, logical(1))
+                if (base::any(numeric_cols)) {
+                    metric_value <- summary_df[[base::which(numeric_cols)[1]]][1]
+                }
+            }
+        }
+        elapsed <- base::difftime(base::Sys.time(), start_time, units = "mins")
+        log_msg(
+            "Completed ",
+            i,
+            "/",
+            total_sets,
+            " metric=",
+            metric_value,
+            " elapsed=",
+            base::round(base::as.numeric(elapsed), 2),
+            " min"
+        )
+        results <- c(results, list(base::c(param_set_raw, list(metric = metric_value))))
+    }
+    results
+}
+
+# Pick best tuning run, write tuning_results.json and STAC sidecar, return summary.
+#
+# Args:
+#   results: Output list from .openeocraft_tune_evaluate_param_sets.
+#
+# Returns:
+#   list(best_params, best_score, results) with results as parsed JSON list.
+#
+# Raises:
+#   openeocraft::api_stop(400/500) on empty or all-NA metrics.
+.openeocraft_tune_finalize_results <- function(results) {
+    if (base::length(results) == 0L) {
+        openeocraft::api_stop(400, "Tuning produced no results (empty parameter grid).")
+    }
+    mets <- base::vapply(
+        results,
+        function(x) {
+            x$metric
+        },
+        base::numeric(1),
+        USE.NAMES = FALSE
+    )
+    mets_use <- base::replace(mets, base::is.na(mets), -Inf)
+    if (!base::any(base::is.finite(mets))) {
+        openeocraft::api_stop(
+            500,
+            "All tuning runs returned a missing metric; check validation errors and scoring name."
+        )
+    }
+    best_idx <- base::which.max(mets_use)
+    best_result <- results[[best_idx]]
+    env <- openeocraft::current_env()
+    job_dir <- openeocraft::job_get_dir(env$api, env$user, env$job$id)
+    host <- openeocraft::get_host(env$api, env$req)
+    results_json <- jsonlite::toJSON(results, auto_unbox = TRUE, digits = 16)
+    results_file <- base::file.path(job_dir, "tuning_results.json")
+    base::writeLines(results_json, results_file)
+    asset_href <- openeocraft::make_job_files_url(
+        host = host,
+        user = env$user,
+        job_id = env$job$id,
+        file = "tuning_results.json"
+    )
+    collection <- openeocraft::job_empty_collection(env$api, env$user, env$job)
+    collection$assets <- list(
+        tuning_results = list(
+            href = asset_href,
+            type = "application/json",
+            roles = list("data")
+        )
+    )
+    jsonlite::write_json(
+        x = collection,
+        path = base::file.path(job_dir, "_collection.json"),
+        auto_unbox = TRUE,
+        digits = 16
+    )
+    list(
+        best_params = best_result,
+        best_score = best_result$metric,
+        results = jsonlite::fromJSON(results_json, simplifyVector = FALSE)
+    )
+}
+
+# Train on full sample set using the best tuning row (same mapping as validation loop).
+#
+# Args:
+#   model: openEO ML model list (ml_method, ml_args, mlm_*).
+#   training_obj: sits samples.
+#   best_row: List with hyperparameters and metric (metric is ignored).
+#   optimizer_context: "param_grid" or "parameters".
+#   log_msg: function(...) for progress.
+#   log_label: Prefix for sits_train timing message.
+#
+# Returns:
+#   Trained sits model with MLM attributes (same contract as ml_fit output).
+#
+# Raises:
+#   Propagates sits / training errors; GPU OOM may retry on CPU like tuning.
+.openeocraft_tune_final_train <- function(model,
+                                          training_obj,
+                                          best_row,
+                                          optimizer_context,
+                                          log_msg,
+                                          log_label) {
+    param_set <- best_row
+    param_set$metric <- NULL
+    mapped <- .openeocraft_tune_map_optimizer_param(
+        param_set,
+        model$ml_args,
+        optimizer_context
+    )
+    param_set <- mapped$param_set
+    base_args <- mapped$ml_args
+    mapped <- .openeocraft_tune_map_opt_hparams(param_set, base_args)
+    param_set <- mapped$param_set
+    base_args <- mapped$ml_args
+    mapped <- .openeocraft_tune_map_rf_params(param_set, base_args)
+    param_set <- mapped$param_set
+    base_args <- mapped$ml_args
+    merged_args <- utils::modifyList(base_args, param_set)
+    ml_method <- base::do.call(model$ml_method, merged_args)
+    log_msg("Final fit on full training set with best hyperparameters.")
+    trained_model <- base::tryCatch(
+        .openeocraft_sits_train_logged(training_obj, ml_method, log_label),
+        error = function(e) {
+            if (base::grepl("GPU memory", e$message, ignore.case = TRUE)) {
+                log_msg("GPU memory low on final fit, retrying with CPU settings.")
+                return(
+                    .openeocraft_tune_with_force_cpu(
+                        .openeocraft_sits_train_logged(
+                            training_obj,
+                            ml_method,
+                            log_label
+                        )
+                    )
+                )
+            }
+            stop(e)
+        }
+    )
+    .openeocraft_attach_ml_fit_metadata(
+        trained_model,
+        model,
+        training_obj,
+        ml_args_for_hyperparameters = merged_args
+    )
+}
+
+# Load a sits data cube from a configured source and collection (openEO process).
+#
+# Args:
+#   id: Composite id "source-collection" resolved against sits_config() sources.
+#   spatial_extent: List with west, east, south, north (EPSG:4326 bbox).
+#   temporal_extent: Length-2 vector: start and end date for sits_cube.
+#   bands: Optional band names (character vector or list).
+#   properties: Reserved / passed through for catalog filters when supported.
+#
+# Returns:
+#   sits raster cube; attr(, "roi") is the sf bbox polygon used for the request.
+#
+# Raises:
+#   stop() for invalid id, spatial keys, temporal length, unknown bands, or
+#   sits_cube failures (wrapped with "Error in load_collection():" prefix).
+#
+# Client-facing openEO documentation continues in the #* block below.
+#
 #* @summary Load a collection
 #*
 #* @description
@@ -176,7 +870,15 @@ load_collection <- function(id,
                 )
             }
 
-            # Create data cube with correct roi format
+            # Network / STAC discovery can take minutes; this runs when the cube
+            # is first forced (often after upstream process START messages — lazy args).
+            base::message(
+                "[load_collection] sits_cube(source=",
+                source,
+                ", collection=",
+                collection,
+                ") ..."
+            )
             data <- sits::sits_cube(
                 source = source,
                 collection = collection,
@@ -186,6 +888,7 @@ load_collection <- function(id,
                 start_date = temporal_extent[[1]],
                 end_date = temporal_extent[[2]]
             )
+            base::message("[load_collection] sits_cube() returned")
 
             base::attr(data, "roi") <- roi
             return(data)
@@ -197,6 +900,19 @@ load_collection <- function(id,
 }
 
 
+# Random Forest classification model spec for ml_fit (sits_rfor).
+#
+# Args:
+#   num_trees: Number of trees in the forest.
+#   max_variables: mtry as number, or "sqrt"/"log2" resolved at train() time.
+#   seed: Optional RNG seed before training.
+#
+# Returns:
+#   List with ml_method, ml_args, mlm_* metadata, and train(training_set).
+#
+# Raises:
+#   stop() from train() if max_variables type is invalid; sits_train errors otherwise.
+#
 #* @openeo-process
 mlm_class_random_forest <- function(num_trees = 100,
                                     max_variables = "sqrt",
@@ -246,11 +962,27 @@ mlm_class_random_forest <- function(num_trees = 100,
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_random_forest::train"
+            )
         }
     )
 }
 
+# Linear-kernel SVM classification model spec (sits_svm).
+#
+# Args:
+#   kernel, degree, coef0, cost, tolerance, epsilon, cachesize: e1071/caret SVM args.
+#   seed: Optional RNG seed before training.
+#
+# Returns:
+#   Model spec list with train(training_set) closure.
+#
+# Raises:
+#   Propagates sits training errors.
+#
 #* @openeo-process
 mlm_class_svm <- function(kernel = "radial",
                           degree = 3,
@@ -295,11 +1027,27 @@ mlm_class_svm <- function(kernel = "radial",
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_svm::train"
+            )
         }
     )
 }
 
+# XGBoost classification model spec (sits_xgboost).
+#
+# Args:
+#   learning_rate, min_split_loss, max_depth, nfold, early_stopping_rounds: booster args.
+#   seed: Optional RNG seed before training.
+#
+# Returns:
+#   Model spec list with train(training_set).
+#
+# Raises:
+#   Propagates sits/xgboost errors.
+#
 #* @openeo-process
 mlm_class_xgboost <- function(learning_rate = 0.15,
                               min_split_loss = 1,
@@ -334,12 +1082,29 @@ mlm_class_xgboost <- function(learning_rate = 0.15,
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_xgboost::train"
+            )
         }
     )
 }
 
 
+# MLP (torch) classification model spec (sits_mlp).
+#
+# Args:
+#   layers, dropout_rates: Network shape; optimizer: name mapped to torch optim.
+#   learning_rate, epsilon, weight_decay: passed in opt_hparams.
+#   epochs, batch_size: training schedule; seed: optional RNG.
+#
+# Returns:
+#   Model spec list with train(training_set).
+#
+# Raises:
+#   stop() if optimizer name is unsupported; torch/sits errors during train.
+#
 #* @openeo-process
 mlm_class_mlp <- function(layers = list(512, 512, 512),
                           dropout_rates = list(0.2, 0.3, 0.4),
@@ -405,11 +1170,28 @@ mlm_class_mlp <- function(layers = list(512, 512, 512),
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_mlp::train"
+            )
         }
     )
 }
 
+# TempCNN classification model spec (sits_tempcnn / torch).
+#
+# Args:
+#   cnn_layers, cnn_kernels, cnn_dropout_rates: CNN stack; dense_layer_*: head.
+#   optimizer, learning_rate, epsilon, weight_decay, lr_decay_*: optim and schedule.
+#   epochs, batch_size, seed, verbose: training controls.
+#
+# Returns:
+#   Model spec list with train(training_set).
+#
+# Raises:
+#   stop() on unsupported optimizer; GPU OOM may surface from sits/torch.
+#
 #* @openeo-process
 mlm_class_tempcnn <- function(cnn_layers = list(64, 64, 64),
                               cnn_kernels = list(5, 5, 5),
@@ -495,11 +1277,27 @@ mlm_class_tempcnn <- function(cnn_layers = list(64, 64, 64),
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_tempcnn::train"
+            )
         }
     )
 }
 
+# TAE (Temporal Autoencoder) classification model spec (sits_tae).
+#
+# Args:
+#   epochs, batch_size: training; optimizer and lr/weight_decay/epsilon: torch optim.
+#   lr_decay_epochs, lr_decay_rate: step decay; seed: optional RNG.
+#
+# Returns:
+#   Model spec list with train(training_set).
+#
+# Raises:
+#   stop() on unsupported optimizer.
+#
 #* @openeo-process
 mlm_class_tae <- function(epochs = 150,
                           batch_size = 64,
@@ -563,12 +1361,28 @@ mlm_class_tae <- function(epochs = 150,
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_tae::train"
+            )
         }
     )
 }
 
 
+# LightTAE classification model spec (sits_lighttae).
+#
+# Args:
+#   epochs, batch_size: training; optimizer and lr/epsilon/weight_decay: torch optim.
+#   lr_decay_epochs, lr_decay_rate: schedule; seed: optional RNG.
+#
+# Returns:
+#   Model spec list with train(training_set).
+#
+# Raises:
+#   stop() on unsupported optimizer.
+#
 #* @openeo-process
 mlm_class_lighttae <- function(epochs = 150,
                                batch_size = 128,
@@ -632,151 +1446,55 @@ mlm_class_lighttae <- function(epochs = 150,
             if (!base::is.null(seed)) {
                 base::set.seed(seed)
             }
-            sits::sits_train(training_set, model)
+            .openeocraft_sits_train_logged(
+                training_set,
+                model,
+                "mlm_class_lighttae::train"
+            )
         }
     )
 }
 
-#* @openeo-process
-ml_fit <- function(model, training_set, target = "label") {
-    base::message("[ml_fit] START")
-    base::on.exit(base::message("[ml_fit] END"))
-    # Allow training_set as:
-    # 1) JSON-serialized object
-    # 2) Local path to an RDS file
-    # 3) URL to an RDS file
-    # 4) Already-loaded object
-    load_training <- function(x) {
-        if (!base::is.character(x) || base::length(x) != 1L) {
-            return(x) # already an object
-        }
-
-        # URL to RDS
-        if (base::grepl("^https?://", x)) {
-            tmp <- base::tempfile(fileext = ".rds")
-            base::on.exit(base::unlink(tmp), add = TRUE)
-            return(base::tryCatch(
-                {
-                    utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
-                    base::readRDS(tmp)
-                },
-                error = function(e) {
-                    stop(
-                        base::sprintf(
-                            "Failed to download/read training_set from URL: %s",
-                            e$message
-                        ),
-                        call. = FALSE
-                    )
-                }
-            ))
-        }
-
-        # JSON-serialized object (explicit option, not just fallback)
-        json_obj <- base::tryCatch(
-            jsonlite::unserializeJSON(x),
-            error = function(...) {
-                NULL
-            }
-        )
-        if (!base::is.null(json_obj)) {
-            return(json_obj)
-        }
-
-        # Local RDS file
-        if (base::file.exists(x)) {
-            return(base::tryCatch(
-                base::readRDS(x),
-                error = function(e) {
-                    stop(
-                        base::sprintf(
-                            "Failed to read training_set from file: %s",
-                            e$message
-                        ),
-                        call. = FALSE
-                    )
-                }
-            ))
-        }
-
-        stop(
-            "training_set must be a URL to RDS, a local RDS path, a JSON-serialized object, or an object",
-            call. = FALSE
-        )
+# Attach MLM metadata to a trained sits model (shared by ml_fit and tuning final fit).
+#
+# Args:
+#   trained_model: Object returned by sits_train / model$train.
+#   model_spec: List with mlm_task, mlm_architecture, mlm_framework, ml_args.
+#   training_obj: sits samples used for training (metadata extraction).
+#   ml_args_for_hyperparameters: If non-NULL, used for mlm_hyperparameters (non-functions
+#     only); otherwise model_spec$ml_args.
+#
+# Returns:
+#   trained_model with attributes set (same object).
+.openeocraft_attach_ml_fit_metadata <- function(trained_model,
+                                                model_spec,
+                                                training_obj,
+                                                ml_args_for_hyperparameters = NULL) {
+    if (!base::is.null(model_spec$mlm_task)) {
+        base::attr(trained_model, "mlm_task") <- model_spec$mlm_task
+    }
+    if (!base::is.null(model_spec$mlm_architecture)) {
+        base::attr(trained_model, "mlm_architecture") <- model_spec$mlm_architecture
+    }
+    if (!base::is.null(model_spec$mlm_framework)) {
+        base::attr(trained_model, "mlm_framework") <- model_spec$mlm_framework
     }
 
-    training_obj <- load_training(training_set)
-
-    # Log training data sample info
-    base::message("[ml_fit] Training data loaded successfully")
-    base::message("[ml_fit] Training data summary:")
-    base::message("  - Number of samples: ", base::nrow(training_obj))
-    base::message("  - Labels: ", base::paste(base::unique(training_obj$label), collapse = ", "))
-    base::tryCatch(
-        {
-            bands <- sits::sits_bands(training_obj)
-            base::message("  - Bands: ", base::paste(bands, collapse = ", "))
-        },
-        error = function(e) {
-            NULL
-        }
-    )
-    base::tryCatch(
-        {
-            timeline <- sits::sits_timeline(training_obj)
-            base::message(
-                "  - Timeline: ",
-                base::length(timeline),
-                " dates (",
-                timeline[1],
-                " to ",
-                timeline[base::length(timeline)],
-                ")"
-            )
-        },
-        error = function(e) {
-            NULL
-        }
-    )
-    base::message("  - First 5 sample locations:")
-    for (i in base::seq_len(base::min(5, base::nrow(training_obj)))) {
-        base::message(
-            "    [",
-            i,
-            "] label=",
-            training_obj$label[i],
-            ", lon=",
-            base::round(training_obj$longitude[i], 4),
-            ", lat=",
-            base::round(training_obj$latitude[i], 4)
-        )
+    hparam_src <- if (!base::is.null(ml_args_for_hyperparameters)) {
+        ml_args_for_hyperparameters
+    } else {
+        model_spec$ml_args
     }
-    base::message("[ml_fit] Training model...")
-    trained_model <- model$train(training_obj)
-
-    # Propagate MLM metadata from the model spec to the trained model
-    if (!base::is.null(model$mlm_task)) {
-        base::attr(trained_model, "mlm_task") <- model$mlm_task
-    }
-    if (!base::is.null(model$mlm_architecture)) {
-        base::attr(trained_model, "mlm_architecture") <- model$mlm_architecture
-    }
-    if (!base::is.null(model$mlm_framework)) {
-        base::attr(trained_model, "mlm_framework") <- model$mlm_framework
-    }
-
-    # Attach hyperparameters from ml_args (excluding function objects)
-    if (!base::is.null(model$ml_args)) {
+    if (!base::is.null(hparam_src)) {
         hparams <- base::Filter(
             function(x) !base::is.function(x),
-            model$ml_args
+            hparam_src
         )
         if (base::length(hparams) > 0) {
             base::attr(trained_model, "mlm_hyperparameters") <- hparams
         }
     }
 
-    # Extract spatial/temporal metadata from training data
     base::tryCatch(
         {
             bands <- sits::sits_bands(training_obj)
@@ -831,6 +1549,99 @@ ml_fit <- function(model, training_set, target = "label") {
     trained_model
 }
 
+# Train an openEO ML model spec on samples and attach MLM metadata attributes.
+#
+# Args:
+#   model: List from mlm_class_* with $train function.
+#   training_set: URL, RDS path, JSON string, or in-memory sits samples.
+#   target: Label column name (reserved; samples use sits conventions).
+#
+# Returns:
+#   Trained sits model with attributes mlm_task, mlm_architecture, bands, bbox, etc.
+#
+# Raises:
+#   Errors from .openeocraft_load_samples (I/O) or model$train / sits.
+#
+#* @openeo-process
+ml_fit <- function(model, training_set, target = "label") {
+    base::message("[ml_fit] START")
+    base::on.exit(base::message("[ml_fit] END"))
+    # Allow training_set as:
+    # 1) JSON-serialized object
+    # 2) Local path to an RDS file
+    # 3) URL to an RDS file
+    # 4) Already-loaded object
+    training_obj <- .openeocraft_load_samples(
+        training_set,
+        param_name = "training_set",
+        wrap_io_errors = TRUE
+    )
+
+    # Log training data sample info
+    base::message("[ml_fit] Training data loaded successfully")
+    base::message("[ml_fit] Training data summary:")
+    base::message("  - Number of samples: ", base::nrow(training_obj))
+    base::message("  - Labels: ", base::paste(base::unique(training_obj$label), collapse = ", "))
+    base::tryCatch(
+        {
+            bands <- sits::sits_bands(training_obj)
+            base::message("  - Bands: ", base::paste(bands, collapse = ", "))
+        },
+        error = function(e) {
+            NULL
+        }
+    )
+    base::tryCatch(
+        {
+            timeline <- sits::sits_timeline(training_obj)
+            base::message(
+                "  - Timeline: ",
+                base::length(timeline),
+                " dates (",
+                timeline[1],
+                " to ",
+                timeline[base::length(timeline)],
+                ")"
+            )
+        },
+        error = function(e) {
+            NULL
+        }
+    )
+    base::message("  - First 5 sample locations:")
+    for (i in base::seq_len(base::min(5, base::nrow(training_obj)))) {
+        base::message(
+            "    [",
+            i,
+            "] label=",
+            training_obj$label[i],
+            ", lon=",
+            base::round(training_obj$longitude[i], 4),
+            ", lat=",
+            base::round(training_obj$latitude[i], 4)
+        )
+    }
+    base::message("[ml_fit] Training model...")
+    trained_model <- model$train(training_obj)
+    .openeocraft_attach_ml_fit_metadata(
+        trained_model,
+        model,
+        training_obj,
+        ml_args_for_hyperparameters = NULL
+    )
+}
+
+# Classify a cube with a trained model and apply label layer (openEO).
+#
+# Args:
+#   data: sits raster cube; model: object from ml_fit.
+#
+# Returns:
+#   Cube after sits_classify and sits_label_classification.
+#
+# Raises:
+#   Propagates sits errors; uses job temp dir from current_env().
+#
 #* @openeo-process
 ml_predict <- function(data, model) {
     base::message("[ml_predict] START")
@@ -869,6 +1680,22 @@ ml_predict <- function(data, model) {
     data
 }
 
+# Validate a model spec on training data; write metrics.json STAC sidecar.
+#
+# Args:
+#   model: mlm_class_* spec with ml_method and ml_args.
+#   training_data, validation_data: Sample sources (see .openeocraft_load_samples).
+#   target: Reserved label column name.
+#   validation_split: Used when cv <= 1.
+#   cv: Folds; if >1 runs sits_kfold_validate.
+#   seed: Optional RNG.
+#
+# Returns:
+#   list(metrics = list from metrics.json rows).
+#
+# Raises:
+#   openeocraft::api_stop(400) if model not validatable; load_sample stops.
+#
 #* @openeo-process
 ml_validate <- function(model,
                         training_data,
@@ -884,43 +1711,16 @@ ml_validate <- function(model,
         base::set.seed(seed)
     }
 
-    load_samples <- function(x) {
-        if (!base::is.character(x) || base::length(x) != 1L) {
-            return(x)
-        }
-        if (base::grepl("^https?://", x)) {
-            tmp <- base::tempfile(fileext = ".rds")
-            base::on.exit(base::unlink(tmp), add = TRUE)
-            utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
-            return(base::readRDS(tmp))
-        }
-        json_obj <- base::tryCatch(
-            jsonlite::unserializeJSON(x),
-            error = function(...) {
-                NULL
-            }
-        )
-        if (!base::is.null(json_obj)) {
-            return(json_obj)
-        }
-        if (base::file.exists(x)) {
-            return(base::readRDS(x))
-        }
-        stop("training_data must be a URL, a local path, a JSON object, or an object",
-            call. = FALSE
-        )
-    }
-
     if (base::is.null(model$ml_method) || base::is.null(model$ml_args)) {
         openeocraft::api_stop(400, "Model does not support validation.")
     }
     ml_method <- base::do.call(model$ml_method, model$ml_args)
-    training_obj <- load_samples(training_data)
+    training_obj <- .openeocraft_load_samples(training_data, "training_data")
     base::message("[ml_validate] Training samples loaded: ", base::nrow(training_obj))
 
     validation_obj <- NULL
     if (!base::is.null(validation_data)) {
-        validation_obj <- load_samples(validation_data)
+        validation_obj <- .openeocraft_load_samples(validation_data, "validation_data")
         base::message("[ml_validate] Validation samples loaded: ", base::nrow(validation_obj))
     }
 
@@ -943,20 +1743,7 @@ ml_validate <- function(model,
         )
     }
 
-    build_accuracy_summary <- function(x) {
-        acc <- if (base::inherits(x, "sits_accuracy") || base::inherits(x, "confusionMatrix")) {
-            x
-        } else {
-            sits::sits_accuracy(x)
-        }
-        overall <- acc[["overall"]]
-        if (base::is.null(overall)) {
-            return(base::data.frame())
-        }
-        base::as.data.frame(base::t(overall), stringsAsFactors = FALSE)
-    }
-
-    summary_df <- build_accuracy_summary(acc_obj)
+    summary_df <- .openeocraft_accuracy_summary_df(acc_obj)
     base::message(
         "[ml_validate] Validation complete. Accuracy: ",
         base::round(summary_df$Accuracy[1], 4)
@@ -1000,6 +1787,18 @@ ml_validate <- function(model,
     )
 }
 
+# K-fold cross-validation with fixed fold count; writes metrics.json like ml_validate.
+#
+# Args:
+#   model: mlm_class_* spec; training_data: sample source; folds: integer >= 2.
+#   target, seed: same semantics as ml_validate.
+#
+# Returns:
+#   list(metrics, folds).
+#
+# Raises:
+#   openeocraft::api_stop(400) on bad folds or model; sample load errors.
+#
 #* @openeo-process
 ml_validate_kfold <- function(model,
                               training_data,
@@ -1017,38 +1816,11 @@ ml_validate_kfold <- function(model,
         openeocraft::api_stop(400, "folds must be at least 2 for k-fold cross-validation.")
     }
 
-    load_samples <- function(x) {
-        if (!base::is.character(x) || base::length(x) != 1L) {
-            return(x)
-        }
-        if (base::grepl("^https?://", x)) {
-            tmp <- base::tempfile(fileext = ".rds")
-            base::on.exit(base::unlink(tmp), add = TRUE)
-            utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
-            return(base::readRDS(tmp))
-        }
-        json_obj <- base::tryCatch(
-            jsonlite::unserializeJSON(x),
-            error = function(...) {
-                NULL
-            }
-        )
-        if (!base::is.null(json_obj)) {
-            return(json_obj)
-        }
-        if (base::file.exists(x)) {
-            return(base::readRDS(x))
-        }
-        stop("training_data must be a URL, a local path, a JSON object, or an object",
-            call. = FALSE
-        )
-    }
-
     if (base::is.null(model$ml_method) || base::is.null(model$ml_args)) {
         openeocraft::api_stop(400, "Model does not support validation.")
     }
     ml_method <- base::do.call(model$ml_method, model$ml_args)
-    training_obj <- load_samples(training_data)
+    training_obj <- .openeocraft_load_samples(training_data, "training_data")
     base::message("[ml_validate_kfold] Training samples loaded: ", base::nrow(training_obj))
     base::message("[ml_validate_kfold] Running ", folds, "-fold cross-validation...")
 
@@ -1060,20 +1832,7 @@ ml_validate_kfold <- function(model,
         progress = FALSE
     )
 
-    build_accuracy_summary <- function(x) {
-        acc <- if (base::inherits(x, "sits_accuracy") || base::inherits(x, "confusionMatrix")) {
-            x
-        } else {
-            sits::sits_accuracy(x)
-        }
-        overall <- acc[["overall"]]
-        if (base::is.null(overall)) {
-            return(base::data.frame())
-        }
-        base::as.data.frame(base::t(overall), stringsAsFactors = FALSE)
-    }
-
-    summary_df <- build_accuracy_summary(acc_obj)
+    summary_df <- .openeocraft_accuracy_summary_df(acc_obj)
     base::message(
         "[ml_validate_kfold] Cross-validation complete. Accuracy: ",
         base::round(summary_df$Accuracy[1], 4)
@@ -1119,6 +1878,22 @@ ml_validate_kfold <- function(model,
     )
 }
 
+# Exhaustive grid search over discrete parameter combinations.
+#
+# Args:
+#   model: mlm_class_* spec supporting ml_method/ml_args.
+#   training_data: Sample source string or object.
+#   parameters: Named list of grid dimensions (lists or arrays expanded in order).
+#   target: Reserved; scoring: metric column name (e.g. "accuracy").
+#   cv, validation_split, seed: validation controls.
+#
+# Returns:
+#   Trained model on the full training set using the best hyperparameters;
+#   `tuning_results.json` and job `_collection.json` assets are written as before.
+#
+# Raises:
+#   openeocraft::api_stop(400) if model or parameters invalid.
+#
 #* @openeo-process
 ml_tune_grid <- function(model,
                          training_data,
@@ -1142,33 +1917,6 @@ ml_tune_grid <- function(model,
     }
     if (!base::is.list(parameters) || base::length(parameters) == 0) {
         openeocraft::api_stop(400, "parameters must be a non-empty object.")
-    }
-
-    load_samples <- function(x) {
-        if (!base::is.character(x) || base::length(x) != 1L) {
-            return(x)
-        }
-        if (base::grepl("^https?://", x)) {
-            tmp <- base::tempfile(fileext = ".rds")
-            base::on.exit(base::unlink(tmp), add = TRUE)
-            utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
-            return(base::readRDS(tmp))
-        }
-        json_obj <- base::tryCatch(
-            jsonlite::unserializeJSON(x),
-            error = function(...) {
-                NULL
-            }
-        )
-        if (!base::is.null(json_obj)) {
-            return(json_obj)
-        }
-        if (base::file.exists(x)) {
-            return(base::readRDS(x))
-        }
-        stop("training_set must be a URL to RDS, a local RDS path, a JSON-serialized object, or an object",
-            call. = FALSE
-        )
     }
 
     normalize_grid_values <- function(values) {
@@ -1202,248 +1950,43 @@ ml_tune_grid <- function(model,
         combos
     }
 
-    training_obj <- load_samples(training_data)
+    training_obj <- .openeocraft_load_samples(training_data, "training_data")
     log_msg("Training samples loaded: ", base::nrow(training_obj))
     param_sets <- expand_params(parameters)
-    results <- list()
-
-    metric_key <- base::tolower(scoring)
-    total_sets <- base::length(param_sets)
-    map_optimizer_param <- function(param_set, ml_args) {
-        if (base::is.null(param_set$optimizer)) {
-            return(list(param_set = param_set, ml_args = ml_args))
-        }
-        if (!base::is.character(param_set$optimizer)) {
-            return(list(param_set = param_set, ml_args = ml_args))
-        }
-        optimizer_fn <- base::switch(param_set$optimizer,
-            "adam" = torch::optim_adamw,
-            "adabound" = torch::optim_adabound,
-            "adabelief" = torch::optim_adabelief,
-            "madagrad" = torch::optim_madagrad,
-            "nadam" = torch::optim_nadam,
-            "qhadam" = torch::optim_qhadam,
-            "radam" = torch::optim_radam,
-            "swats" = torch::optim_swats,
-            "yogi" = torch::optim_yogi,
-            NULL
-        )
-        if (base::is.null(optimizer_fn)) {
-            openeocraft::api_stop(400, "Unsupported optimizer in param_grid.")
-        }
-        ml_args$optimizer <- optimizer_fn
-        param_set$optimizer <- NULL
-        list(param_set = param_set, ml_args = ml_args)
-    }
-
-    map_opt_hparams <- function(param_set, ml_args) {
-        if (base::is.null(ml_args$opt_hparams) || !base::is.list(ml_args$opt_hparams)) {
-            return(list(param_set = param_set, ml_args = ml_args))
-        }
-        opt_map <- list(
-            learning_rate = "lr",
-            lr = "lr",
-            epsilon = "eps",
-            eps = "eps",
-            weight_decay = "weight_decay"
-        )
-        for (name in base::names(opt_map)) {
-            if (!base::is.null(param_set[[name]])) {
-                ml_args$opt_hparams[[opt_map[[name]]]] <- param_set[[name]]
-                param_set[[name]] <- NULL
-            }
-        }
-        list(param_set = param_set, ml_args = ml_args)
-    }
-
-    map_rf_params <- function(param_set, ml_args) {
-        # Map max_variables to mtry for Random Forest compatibility
-        if (!base::is.null(param_set$max_variables)) {
-            ml_args$mtry <- param_set$max_variables
-            param_set$max_variables <- NULL
-        }
-        list(param_set = param_set, ml_args = ml_args)
-    }
-
-    build_accuracy_summary <- function(x) {
-        acc <- if (base::inherits(x, "sits_accuracy") || base::inherits(x, "confusionMatrix")) {
-            x
-        } else {
-            sits::sits_accuracy(x)
-        }
-        overall <- acc[["overall"]]
-        if (base::is.null(overall)) {
-            return(base::data.frame())
-        }
-        base::as.data.frame(base::t(overall), stringsAsFactors = FALSE)
-    }
-
-    with_force_cpu <- function(expr) {
-        base::Sys.setenv(CUDA_VISIBLE_DEVICES = "")
-        base::Sys.setenv(TORCH_DISABLE_MPS = "1")
-        base::Sys.setenv(TORCH_USE_MPS_FALLBACK = "1")
-        if (!base::requireNamespace("torch", quietly = TRUE)) {
-            return(base::force(expr))
-        }
-        torch_ns <- base::asNamespace("torch")
-        override <- function(name, replacement) {
-            if (!base::exists(name, envir = torch_ns, inherits = FALSE)) {
-                return(NULL)
-            }
-            locked <- base::bindingIsLocked(name, torch_ns)
-            if (locked) {
-                base::unlockBinding(name, torch_ns)
-            }
-            original <- base::get(name, envir = torch_ns)
-            base::assign(name, replacement, envir = torch_ns)
-            if (locked) {
-                base::lockBinding(name, torch_ns)
-            }
-            list(name = name, original = original, locked = locked)
-        }
-        restore <- function(info) {
-            if (base::is.null(info)) {
-                return(base::invisible(NULL))
-            }
-            if (info$locked) {
-                base::unlockBinding(info$name, torch_ns)
-            }
-            base::assign(info$name, info$original, envir = torch_ns)
-            if (info$locked) {
-                base::lockBinding(info$name, torch_ns)
-            }
-            base::invisible(NULL)
-        }
-        cuda_info <- override("cuda_is_available", function() FALSE)
-        mps_info <- override("backends_mps_is_available", function() FALSE)
-        base::on.exit(
-            {
-                restore(cuda_info)
-                restore(mps_info)
-            },
-            add = TRUE
-        )
-        base::force(expr)
-    }
-
-    run_validation <- function(ml_method) {
-        if (base::is.null(cv) || cv <= 1) {
-            return(sits::sits_validate(
-                samples = training_obj,
-                validation_split = validation_split,
-                ml_method = ml_method
-            ))
-        }
-        sits::sits_kfold_validate(
-            samples = training_obj,
-            folds = cv,
-            ml_method = ml_method,
-            multicores = .openeocraft_multicores(),
-            progress = FALSE
-        )
-    }
-
-    for (idx in base::seq_along(param_sets)) {
-        param_set <- param_sets[[idx]]
-        param_set_raw <- param_set
-        start_time <- base::Sys.time()
-        mapped <- map_optimizer_param(param_set, model$ml_args)
-        param_set <- mapped$param_set
-        base_args <- mapped$ml_args
-        mapped <- map_opt_hparams(param_set, base_args)
-        param_set <- mapped$param_set
-        base_args <- mapped$ml_args
-        mapped <- map_rf_params(param_set, base_args)
-        param_set <- mapped$param_set
-        base_args <- mapped$ml_args
-        merged_args <- utils::modifyList(base_args, param_set)
-        log_msg(
-            "Evaluating ",
-            idx,
-            "/",
-            total_sets,
-            " with params: ",
-            jsonlite::toJSON(param_set_raw, auto_unbox = TRUE)
-        )
-        ml_method <- base::do.call(model$ml_method, merged_args)
-        acc_obj <- base::tryCatch(
-            run_validation(ml_method),
-            error = function(e) {
-                if (base::grepl("GPU memory", e$message, ignore.case = TRUE)) {
-                    log_msg("GPU memory low, retrying with CPU settings.")
-                    return(with_force_cpu(run_validation(ml_method)))
-                }
-                stop(e)
-            }
-        )
-
-        summary_df <- build_accuracy_summary(acc_obj)
-        metric_value <- NA_real_
-        if (base::is.data.frame(summary_df)) {
-            cols <- base::tolower(base::names(summary_df))
-            idx <- base::match(metric_key, cols)
-            if (!base::is.na(idx)) {
-                metric_value <- summary_df[[idx]][1]
-            } else {
-                numeric_cols <- base::vapply(summary_df, base::is.numeric, logical(1))
-                if (base::any(numeric_cols)) {
-                    metric_value <- summary_df[[base::which(numeric_cols)[1]]][1]
-                }
-            }
-        }
-        elapsed <- base::difftime(base::Sys.time(), start_time, units = "mins")
-        log_msg(
-            "Completed ",
-            idx,
-            "/",
-            total_sets,
-            " metric=",
-            metric_value,
-            " elapsed=",
-            base::round(base::as.numeric(elapsed), 2),
-            " min"
-        )
-        results <- c(results, list(base::c(param_set_raw, list(metric = metric_value))))
-    }
-
-    best_idx <- base::which.max(base::vapply(results, function(x) x$metric, base::numeric(1), USE.NAMES = FALSE))
-    best_result <- results[[best_idx]]
-
-    env <- openeocraft::current_env()
-    job_dir <- openeocraft::job_get_dir(env$api, env$user, env$job$id)
-    host <- openeocraft::get_host(env$api, env$req)
-    results_json <- jsonlite::toJSON(results, auto_unbox = TRUE, digits = 16)
-    results_file <- base::file.path(job_dir, "tuning_results.json")
-    base::writeLines(results_json, results_file)
-
-    asset_href <- openeocraft::make_job_files_url(
-        host = host,
-        user = env$user,
-        job_id = env$job$id,
-        file = "tuning_results.json"
+    results <- .openeocraft_tune_evaluate_param_sets(
+        model = model,
+        training_obj = training_obj,
+        param_sets = param_sets,
+        cv = cv,
+        validation_split = validation_split,
+        scoring = scoring,
+        log_msg = log_msg,
+        optimizer_context = "param_grid"
     )
-    collection <- openeocraft::job_empty_collection(env$api, env$user, env$job)
-    collection$assets <- list(
-        tuning_results = list(
-            href = asset_href,
-            type = "application/json",
-            roles = list("data")
-        )
-    )
-    jsonlite::write_json(
-        x = collection,
-        path = base::file.path(job_dir, "_collection.json"),
-        auto_unbox = TRUE,
-        digits = 16
-    )
-
-    list(
-        best_params = best_result,
-        best_score = best_result$metric,
-        results = jsonlite::fromJSON(results_json, simplifyVector = FALSE)
+    fin <- .openeocraft_tune_finalize_results(results)
+    .openeocraft_tune_final_train(
+        model,
+        training_obj,
+        fin$best_params,
+        "param_grid",
+        log_msg,
+        "ml_tune_grid::final_train"
     )
 }
 
+# Random search: sample n_iter combinations from parameter distributions.
+#
+# Args:
+#   model, training_data, target, scoring, cv, validation_split, seed: as ml_tune_grid.
+#   parameters: Named list; values can be distributions (type uniform, log_uniform, etc.).
+#   n_iter: Number of random draws.
+#
+# Returns:
+#   Same as ml_tune_grid (trained model + tuning_results.json sidecar).
+#
+# Raises:
+#   openeocraft::api_stop(400) on invalid model or parameters.
+#
 #* @openeo-process
 ml_tune_random <- function(model,
                            training_data,
@@ -1469,33 +2012,6 @@ ml_tune_random <- function(model,
     }
     if (!base::is.list(parameters) || base::length(parameters) == 0) {
         openeocraft::api_stop(400, "parameters must be a non-empty object.")
-    }
-
-    load_samples <- function(x) {
-        if (!base::is.character(x) || base::length(x) != 1L) {
-            return(x)
-        }
-        if (base::grepl("^https?://", x)) {
-            tmp <- base::tempfile(fileext = ".rds")
-            base::on.exit(base::unlink(tmp), add = TRUE)
-            utils::download.file(x, tmp, mode = "wb", quiet = TRUE)
-            return(base::readRDS(tmp))
-        }
-        json_obj <- base::tryCatch(
-            jsonlite::unserializeJSON(x),
-            error = function(...) {
-                NULL
-            }
-        )
-        if (!base::is.null(json_obj)) {
-            return(json_obj)
-        }
-        if (base::file.exists(x)) {
-            return(base::readRDS(x))
-        }
-        stop("training_data must be a URL, a local path, a JSON object, or an object",
-            call. = FALSE
-        )
     }
 
     sample_from_dist <- function(param_spec) {
@@ -1534,251 +2050,43 @@ ml_tune_random <- function(model,
         result
     }
 
-    training_obj <- load_samples(training_data)
+    training_obj <- .openeocraft_load_samples(training_data, "training_data")
     log_msg("Training samples loaded: ", base::nrow(training_obj))
     log_msg("Generating ", n_iter, " random parameter combinations.")
 
     param_sets <- base::lapply(base::seq_len(n_iter), function(i) sample_params(parameters))
-    results <- list()
-
-    metric_key <- base::tolower(scoring)
-    total_sets <- base::length(param_sets)
-
-    map_optimizer_param <- function(param_set, ml_args) {
-        if (base::is.null(param_set$optimizer)) {
-            return(list(param_set = param_set, ml_args = ml_args))
-        }
-        if (!base::is.character(param_set$optimizer)) {
-            return(list(param_set = param_set, ml_args = ml_args))
-        }
-        optimizer_fn <- base::switch(param_set$optimizer,
-            "adam" = torch::optim_adamw,
-            "adabound" = torch::optim_adabound,
-            "adabelief" = torch::optim_adabelief,
-            "madagrad" = torch::optim_madagrad,
-            "nadam" = torch::optim_nadam,
-            "qhadam" = torch::optim_qhadam,
-            "radam" = torch::optim_radam,
-            "swats" = torch::optim_swats,
-            "yogi" = torch::optim_yogi,
-            NULL
-        )
-        if (base::is.null(optimizer_fn)) {
-            openeocraft::api_stop(400, "Unsupported optimizer in parameters.")
-        }
-        ml_args$optimizer <- optimizer_fn
-        param_set$optimizer <- NULL
-        list(param_set = param_set, ml_args = ml_args)
-    }
-
-    map_opt_hparams <- function(param_set, ml_args) {
-        if (base::is.null(ml_args$opt_hparams) || !base::is.list(ml_args$opt_hparams)) {
-            return(list(param_set = param_set, ml_args = ml_args))
-        }
-        opt_map <- list(
-            learning_rate = "lr",
-            lr = "lr",
-            epsilon = "eps",
-            eps = "eps",
-            weight_decay = "weight_decay"
-        )
-        for (name in base::names(opt_map)) {
-            if (!base::is.null(param_set[[name]])) {
-                ml_args$opt_hparams[[opt_map[[name]]]] <- param_set[[name]]
-                param_set[[name]] <- NULL
-            }
-        }
-        list(param_set = param_set, ml_args = ml_args)
-    }
-
-    map_rf_params <- function(param_set, ml_args) {
-        # Map max_variables to mtry for Random Forest compatibility
-        if (!base::is.null(param_set$max_variables)) {
-            ml_args$mtry <- param_set$max_variables
-            param_set$max_variables <- NULL
-        }
-        list(param_set = param_set, ml_args = ml_args)
-    }
-
-    build_accuracy_summary <- function(x) {
-        acc <- if (base::inherits(x, "sits_accuracy") || base::inherits(x, "confusionMatrix")) {
-            x
-        } else {
-            sits::sits_accuracy(x)
-        }
-        overall <- acc[["overall"]]
-        if (base::is.null(overall)) {
-            return(base::data.frame())
-        }
-        base::as.data.frame(base::t(overall), stringsAsFactors = FALSE)
-    }
-
-    with_force_cpu <- function(expr) {
-        base::Sys.setenv(CUDA_VISIBLE_DEVICES = "")
-        base::Sys.setenv(TORCH_DISABLE_MPS = "1")
-        base::Sys.setenv(TORCH_USE_MPS_FALLBACK = "1")
-        if (!base::requireNamespace("torch", quietly = TRUE)) {
-            return(base::force(expr))
-        }
-        torch_ns <- base::asNamespace("torch")
-        override <- function(name, replacement) {
-            if (!base::exists(name, envir = torch_ns, inherits = FALSE)) {
-                return(NULL)
-            }
-            locked <- base::bindingIsLocked(name, torch_ns)
-            if (locked) {
-                base::unlockBinding(name, torch_ns)
-            }
-            original <- base::get(name, envir = torch_ns)
-            base::assign(name, replacement, envir = torch_ns)
-            if (locked) {
-                base::lockBinding(name, torch_ns)
-            }
-            list(name = name, original = original, locked = locked)
-        }
-        restore <- function(info) {
-            if (base::is.null(info)) {
-                return(base::invisible(NULL))
-            }
-            if (info$locked) {
-                base::unlockBinding(info$name, torch_ns)
-            }
-            base::assign(info$name, info$original, envir = torch_ns)
-            if (info$locked) {
-                base::lockBinding(info$name, torch_ns)
-            }
-            base::invisible(NULL)
-        }
-        cuda_info <- override("cuda_is_available", function() FALSE)
-        mps_info <- override("backends_mps_is_available", function() FALSE)
-        base::on.exit(
-            {
-                restore(cuda_info)
-                restore(mps_info)
-            },
-            add = TRUE
-        )
-        base::force(expr)
-    }
-
-    run_validation <- function(ml_method) {
-        if (base::is.null(cv) || cv <= 1) {
-            return(sits::sits_validate(
-                samples = training_obj,
-                validation_split = validation_split,
-                ml_method = ml_method
-            ))
-        }
-        sits::sits_kfold_validate(
-            samples = training_obj,
-            folds = cv,
-            ml_method = ml_method,
-            multicores = .openeocraft_multicores(),
-            progress = FALSE
-        )
-    }
-
-    for (idx in base::seq_along(param_sets)) {
-        param_set <- param_sets[[idx]]
-        param_set_raw <- param_set
-        start_time <- base::Sys.time()
-        mapped <- map_optimizer_param(param_set, model$ml_args)
-        param_set <- mapped$param_set
-        base_args <- mapped$ml_args
-        mapped <- map_opt_hparams(param_set, base_args)
-        param_set <- mapped$param_set
-        base_args <- mapped$ml_args
-        mapped <- map_rf_params(param_set, base_args)
-        param_set <- mapped$param_set
-        base_args <- mapped$ml_args
-        merged_args <- utils::modifyList(base_args, param_set)
-        log_msg(
-            "Evaluating ",
-            idx,
-            "/",
-            total_sets,
-            " with params: ",
-            jsonlite::toJSON(param_set_raw, auto_unbox = TRUE)
-        )
-        ml_method <- base::do.call(model$ml_method, merged_args)
-        acc_obj <- base::tryCatch(
-            run_validation(ml_method),
-            error = function(e) {
-                if (base::grepl("GPU memory", e$message, ignore.case = TRUE)) {
-                    log_msg("GPU memory low, retrying with CPU settings.")
-                    return(with_force_cpu(run_validation(ml_method)))
-                }
-                stop(e)
-            }
-        )
-
-        summary_df <- build_accuracy_summary(acc_obj)
-        metric_value <- NA_real_
-        if (base::is.data.frame(summary_df)) {
-            cols <- base::tolower(base::names(summary_df))
-            idx_col <- base::match(metric_key, cols)
-            if (!base::is.na(idx_col)) {
-                metric_value <- summary_df[[idx_col]][1]
-            } else {
-                numeric_cols <- base::vapply(summary_df, base::is.numeric, logical(1))
-                if (base::any(numeric_cols)) {
-                    metric_value <- summary_df[[base::which(numeric_cols)[1]]][1]
-                }
-            }
-        }
-        elapsed <- base::difftime(base::Sys.time(), start_time, units = "mins")
-        log_msg(
-            "Completed ",
-            idx,
-            "/",
-            total_sets,
-            " metric=",
-            metric_value,
-            " elapsed=",
-            base::round(base::as.numeric(elapsed), 2),
-            " min"
-        )
-        results <- c(results, list(base::c(param_set_raw, list(metric = metric_value))))
-    }
-
-    best_idx <- base::which.max(base::vapply(results, function(x) x$metric, base::numeric(1), USE.NAMES = FALSE))
-    best_result <- results[[best_idx]]
-
-    env <- openeocraft::current_env()
-    job_dir <- openeocraft::job_get_dir(env$api, env$user, env$job$id)
-    host <- openeocraft::get_host(env$api, env$req)
-    results_json <- jsonlite::toJSON(results, auto_unbox = TRUE, digits = 16)
-    results_file <- base::file.path(job_dir, "tuning_results.json")
-    base::writeLines(results_json, results_file)
-
-    asset_href <- openeocraft::make_job_files_url(
-        host = host,
-        user = env$user,
-        job_id = env$job$id,
-        file = "tuning_results.json"
+    results <- .openeocraft_tune_evaluate_param_sets(
+        model = model,
+        training_obj = training_obj,
+        param_sets = param_sets,
+        cv = cv,
+        validation_split = validation_split,
+        scoring = scoring,
+        log_msg = log_msg,
+        optimizer_context = "parameters"
     )
-    collection <- openeocraft::job_empty_collection(env$api, env$user, env$job)
-    collection$assets <- list(
-        tuning_results = list(
-            href = asset_href,
-            type = "application/json",
-            roles = list("data")
-        )
-    )
-    jsonlite::write_json(
-        x = collection,
-        path = base::file.path(job_dir, "_collection.json"),
-        auto_unbox = TRUE,
-        digits = 16
-    )
-
-    list(
-        best_params = best_result,
-        best_score = best_result$metric,
-        results = jsonlite::fromJSON(results_json, simplifyVector = FALSE)
+    fin <- .openeocraft_tune_finalize_results(results)
+    .openeocraft_tune_final_train(
+        model,
+        training_obj,
+        fin$best_params,
+        "parameters",
+        log_msg,
+        "ml_tune_random::final_train"
     )
 }
 
+# Classify cube and return probability cube without final label layer (sits_classify only).
+#
+# Args:
+#   data: sits cube; model: trained classifier.
+#
+# Returns:
+#   Classified cube with per-class probabilities.
+#
+# Raises:
+#   Propagates sits errors.
+#
 #* @openeo-process
 ml_predict_probabilities <- function(data, model) {
     base::message("[ml_predict_probabilities] START")
@@ -1811,6 +2119,17 @@ ml_predict_probabilities <- function(data, model) {
 }
 
 
+# Uncertainty layer from a probability cube (sits_uncertainty).
+#
+# Args:
+#   data: Probability or classification cube; approach: sits uncertainty type (e.g. "margin").
+#
+# Returns:
+#   Cube with uncertainty band.
+#
+# Raises:
+#   Propagates sits errors.
+#
 #* @openeo-process
 ml_uncertainty_class <- function(data, approach = "margin") {
     base::message("[ml_uncertainty_class] START")
@@ -1835,6 +2154,17 @@ ml_uncertainty_class <- function(data, approach = "margin") {
     data
 }
 
+# Spatial/temporal smoothing of classification cube (sits_smooth).
+#
+# Args:
+#   data: Cube; window_size, neighborhood_fraction, smoothness: sits_smooth args.
+#
+# Returns:
+#   Smoothed cube.
+#
+# Raises:
+#   Propagates sits errors.
+#
 #* @openeo-process
 ml_smooth_class <- function(data,
                             window_size = 7L,
@@ -1864,6 +2194,17 @@ ml_smooth_class <- function(data,
     data
 }
 
+# Convert probability cube to hard class labels (sits_label_classification).
+#
+# Args:
+#   data: Probability cube from classification.
+#
+# Returns:
+#   Labelled cube.
+#
+# Raises:
+#   Propagates sits errors.
+#
 #* @openeo-process
 ml_label_class <- function(data) {
     base::message("[ml_label_class] START")
@@ -1887,6 +2228,17 @@ ml_label_class <- function(data) {
     data
 }
 
+# Align cube to a regular time grid and resolution (sits_regularize).
+#
+# Args:
+#   data: sits cube; resolution: spatial res; period: time step string for sits.
+#
+# Returns:
+#   Regularized cube.
+#
+# Raises:
+#   Propagates sits errors (I/O heavy).
+#
 #* @openeo-process
 cube_regularize <- function(data, resolution, period) {
     base::message("[cube_regularize] START")
@@ -1906,18 +2258,41 @@ cube_regularize <- function(data, resolution, period) {
         roi <- base::attr(data, "roi")
     }
 
-    # Regularize
+    # Regularize (often the slowest step: I/O + time-series alignment; progress
+    # bars may stall for a long time between updates, especially over AWS/STAC.)
+    mc <- .openeocraft_multicores()
+    base::message(
+        "[cube_regularize] sits_regularize(period=",
+        period,
+        ", res=",
+        resolution,
+        ", multicores=",
+        mc,
+        ") ..."
+    )
     data <- sits::sits_regularize(
         cube = data,
         period = period,
         res = resolution,
         output_dir = result_dir,
         roi = roi,
-        multicores = .openeocraft_multicores()
+        multicores = mc
     )
+    base::message("[cube_regularize] sits_regularize() returned")
     data
 }
 
+# Compute NDVI from NIR and red bands via internal sits_apply raster pass.
+#
+# Args:
+#   data: Regular sits raster cube; nir, red: source band names; target_band: output band name.
+#
+# Returns:
+#   Cube with NDVI band added (or unchanged if band exists and sits warns).
+#
+# Raises:
+#   Propagates sits internal check errors; depends on sits private APIs.
+#
 #* @openeo-process
 ndvi <- function(data,
                  nir = "nir",
@@ -2023,6 +2398,17 @@ ndvi <- function(data,
     data
 }
 
+# Merge two sits cubes along shared dimensions (sits_merge).
+#
+# Args:
+#   cube1, cube2: sits cubes; overlap_resolver, context: reserved for openEO API parity.
+#
+# Returns:
+#   Merged cube.
+#
+# Raises:
+#   Propagates sits_merge errors.
+#
 #* @openeo-process
 merge_cubes <- function(cube1,
                         cube2,
@@ -2038,6 +2424,17 @@ merge_cubes <- function(cube1,
 }
 
 
+# Subset cube to requested band names (sits_select); wavelengths not supported.
+#
+# Args:
+#   data: sits cube; bands: character vector or list of names; wavelengths: must be NULL.
+#
+# Returns:
+#   Filtered cube, or original cube with warning if no intersection.
+#
+# Raises:
+#   stop() if data missing, wavelengths set, bands invalid, or sits_select fails.
+#
 #* @openeo-process
 filter_bands <- function(data,
                          bands = NULL,
@@ -2110,6 +2507,147 @@ filter_bands <- function(data,
     return(result)
 }
 
+# save_result: optional GeoTIFF mosaic (terra) --------------------------------
+
+# merge_mode: "auto" (default) = mosaic GeoTIFF when multiple tiles exist;
+# "yes" = always mosaic when GeoTIFF (e.g. single tile + target_crs); "no" = per-tile assets.
+
+# Parse save_result options for GeoTIFF merge behavior and optional reprojection.
+#
+# Args:
+#   options: List or NULL; may contain merge_tiles (logical or string) and target_crs.
+#
+# Returns:
+#   list(merge_mode = "auto"|"yes"|"no", target_crs = character or NULL).
+.openeocraft_save_result_merge_options <- function(options) {
+    merge_mode <- "auto"
+    target_crs <- NULL
+    if (!base::is.null(options) && base::is.list(options)) {
+        mt <- options[["merge_tiles"]]
+        if (!base::is.null(mt)) {
+            if (base::isTRUE(mt)) {
+                merge_mode <- "yes"
+            } else if (base::is.logical(mt) && base::length(mt) == 1L && !mt) {
+                merge_mode <- "no"
+            } else if (base::is.character(mt) && base::length(mt) == 1L) {
+                tl <- base::tolower(mt)
+                if (tl %in% base::c("true", "1", "yes")) {
+                    merge_mode <- "yes"
+                } else if (tl %in% base::c("false", "0", "no")) {
+                    merge_mode <- "no"
+                }
+            }
+        }
+        tc <- options[["target_crs"]]
+        if (!base::is.null(tc)) {
+            tcs <- base::as.character(tc)
+            if (base::length(tcs) >= 1L && base::nzchar(tcs[[1]])) {
+                target_crs <- tcs[[1]]
+            }
+        }
+    }
+    base::list(merge_mode = merge_mode, target_crs = target_crs)
+}
+
+# Collect unique on-disk raster paths from cube file_info rows.
+#
+# Args:
+#   data: sits cube with file_info paths.
+#
+# Returns:
+#   Character vector of existing file paths (may be empty).
+.openeocraft_collect_local_raster_paths <- function(data) {
+    out <- base::character(0)
+    n <- base::nrow(data)
+    for (i in base::seq_len(n)) {
+        fi <- data$file_info[[i]]
+        if (base::is.null(fi) || base::is.null(fi$path)) {
+            next
+        }
+        p <- fi$path
+        if (base::is.character(p)) {
+            out <- c(out, p)
+        } else {
+            u <- base::unlist(p, use.names = FALSE)
+            if (base::is.character(u)) {
+                out <- c(out, u)
+            }
+        }
+    }
+    out <- base::unique(out[base::nzchar(out) & base::file.exists(out)])
+    out
+}
+
+# Whether format string denotes GeoTIFF output for merge logic.
+#
+# Args:
+#   format: Character scalar or NULL.
+#
+# Returns:
+#   TRUE if recognized as GTiff/GeoTIFF/tif.
+.openeocraft_format_is_geotiff <- function(format) {
+    if (base::is.null(format) ||
+        !base::is.character(format) ||
+        base::length(format) != 1L) {
+        return(FALSE)
+    }
+    f <- base::tolower(format)
+    f <- base::gsub("[^a-z0-9]", "", f)
+    base::grepl("gtiff|geotiff", f) || base::identical(f, "tif")
+}
+
+# Merge multiple GeoTIFFs with terra and optionally reproject.
+#
+# Args:
+#   paths: Character vector of existing .tif paths; out_path: output file;
+#   target_crs: Optional WKT/EPSG string for terra::project.
+#
+# Returns:
+#   TRUE invisibly on success.
+#
+# Raises:
+#   stop() if terra missing, no paths, or write/project fails.
+.openeocraft_merge_geotiff_files <- function(paths, out_path, target_crs) {
+    if (!base::requireNamespace("terra", quietly = TRUE)) {
+        stop(
+            "save_result GeoTIFF merge requires the terra package on the worker.",
+            call. = FALSE
+        )
+    }
+    paths <- paths[base::file.exists(paths)]
+    if (base::length(paths) < 1L) {
+        stop("merge_tiles: no readable raster files on disk.", call. = FALSE)
+    }
+    rl <- base::lapply(paths, function(p) terra::rast(p))
+    m <- rl[[1]]
+    if (base::length(rl) > 1L) {
+        for (k in base::seq_len(base::length(rl))[-1]) {
+            m <- terra::merge(m, rl[[k]])
+        }
+    }
+    if (!base::is.null(target_crs)) {
+        m <- terra::project(m, target_crs, method = "near", gdal = TRUE)
+    }
+    terra::writeRaster(
+        m,
+        out_path,
+        overwrite = TRUE,
+        gdal = base::c("COMPRESS=LZW", "TILED=YES")
+    )
+    base::invisible(TRUE)
+}
+
+# Export cube to job directory, write STAC _collection.json, optional GeoTIFF mosaic.
+#
+# Args:
+#   data: sits cube; format: output format string; options: list merge_tiles, target_crs.
+#
+# Returns:
+#   TRUE on success.
+#
+# Raises:
+#   openeocraft::api_stop on folder creation, invalid merge options, merge failures.
+#
 #* @openeo-process
 save_result <- function(data, format, options = NULL) {
     base::message("[save_result] START")
@@ -2140,29 +2678,125 @@ save_result <- function(data, format, options = NULL) {
     # Save RDS object representation
     file <- base::file.path(result_dir, ".obj", "cube.rds")
     base::saveRDS(data, file)
-    # Create assets list
-    assets <- list()
-    for (i in base::seq_len(base::nrow(data))) {
-        # Change URLs to allow client access files
-        filename <- base::basename(data$file_info[[i]]$path)
-        data$file_info[[i]]$path <- openeocraft::make_job_files_url(
+
+    merge_opts <- .openeocraft_save_result_merge_options(options)
+    is_geotiff <- .openeocraft_format_is_geotiff(format)
+
+    if (merge_opts$merge_mode == "yes" && !is_geotiff) {
+        openeocraft::api_stop(
+            400,
+            "save_result: merge_tiles is only supported for GeoTIFF output format."
+        )
+    }
+
+    tile_paths <- if (is_geotiff) {
+        .openeocraft_collect_local_raster_paths(data)
+    } else {
+        base::character(0)
+    }
+
+    n_paths <- base::length(tile_paths)
+    multi_tile <- n_paths > 1L
+    want_merge <- FALSE
+    if (is_geotiff && merge_opts$merge_mode != "no") {
+        if (merge_opts$merge_mode == "yes") {
+            want_merge <- n_paths >= 1L
+        } else {
+            want_merge <- multi_tile
+        }
+    }
+
+    terra_ok <- base::requireNamespace("terra", quietly = TRUE)
+    if (want_merge && !terra_ok) {
+        if (merge_opts$merge_mode == "yes") {
+            openeocraft::api_stop(
+                500,
+                "save_result: merge_tiles requires the terra package on the worker."
+            )
+        }
+        base::message(
+            "[save_result] GeoTIFF multi-tile merge skipped (terra not installed); ",
+            "using per-tile result assets."
+        )
+        want_merge <- FALSE
+    }
+
+    if (want_merge) {
+        if (base::nrow(data) < 1L) {
+            openeocraft::api_stop(400, "save_result GeoTIFF merge: empty cube.")
+        }
+        if (n_paths < 1L) {
+            openeocraft::api_stop(
+                400,
+                "save_result GeoTIFF merge: no on-disk raster files found after export."
+            )
+        }
+        merged_name <- "openeocraft_merged.tif"
+        merged_abs <- base::file.path(result_dir, merged_name)
+        base::message(
+            "[save_result] GeoTIFF merge (",
+            merge_opts$merge_mode,
+            "): ",
+            n_paths,
+            " file(s) -> ",
+            merged_name,
+            if (!base::is.null(merge_opts$target_crs)) {
+                base::paste0(" (target_crs=", merge_opts$target_crs, ")")
+            } else {
+                ""
+            }
+        )
+        base::tryCatch(
+            .openeocraft_merge_geotiff_files(
+                tile_paths,
+                merged_abs,
+                merge_opts$target_crs
+            ),
+            error = function(e) {
+                openeocraft::api_stop(
+                    500,
+                    base::paste("save_result GeoTIFF merge:", e$message)
+                )
+            }
+        )
+        merged_href <- openeocraft::make_job_files_url(
             host = host,
             user = env$user,
             job_id = env$job$id,
-            file = filename
+            file = merged_name
         )
-        # Transform sits_cube into STAC assets
-        tile_assets <- base::lapply(data$file_info[[i]]$path, \(path) {
-            list(
-                href = path,
-                # TODO: implement format_content_type() function
-                type = openeocraft::format_content_type(format),
-                roles = base::list("data")
+        assets <- base::list()
+        assets[[merged_name]] <- base::list(
+            href = merged_href,
+            type = openeocraft::format_content_type(format),
+            roles = base::list("data")
+        )
+    } else {
+        # Create assets list (one STAC entry per tile file)
+        assets <- base::list()
+        for (i in base::seq_len(base::nrow(data))) {
+            # Change URLs to allow client access files
+            filename <- base::basename(data$file_info[[i]]$path)
+            data$file_info[[i]]$path <- openeocraft::make_job_files_url(
+                host = host,
+                user = env$user,
+                job_id = env$job$id,
+                file = filename
             )
-        })
-        base::names(tile_assets) <- filename
-        assets <- c(assets, tile_assets)
+            # Transform sits_cube into STAC assets
+            tile_assets <- base::lapply(data$file_info[[i]]$path, \(path) {
+                base::list(
+                    href = path,
+                    # TODO: implement format_content_type() function
+                    type = openeocraft::format_content_type(format),
+                    roles = base::list("data")
+                )
+            })
+            base::names(tile_assets) <- filename
+            assets <- c(assets, tile_assets)
+        }
     }
+
     collection <- openeocraft::job_empty_collection(env$api, env$user, env$job)
     collection$assets <- assets
     jsonlite::write_json(
@@ -2173,6 +2807,17 @@ save_result <- function(data, format, options = NULL) {
     return(TRUE)
 }
 
+# Load a cube previously saved by save_result from another job id.
+#
+# Args:
+#   id: Job id whose result_dir contains .obj/cube.rds.
+#
+# Returns:
+#   sits cube from RDS.
+#
+# Raises:
+#   openeocraft::api_stop(500) if paths missing.
+#
 #* @openeo-process
 load_result <- function(id) {
     base::message("[load_result] START")
@@ -2194,6 +2839,17 @@ load_result <- function(id) {
     data
 }
 
+# Copy cube to user workspace folder and write named RDS + STAC collection metadata.
+#
+# Args:
+#   data: sits cube; name: stem for .rds under .obj; folder: workspace subfolder.
+#
+# Returns:
+#   Modified cube with workspace URLs in file_info.
+#
+# Raises:
+#   openeocraft::api_stop(500) if directories cannot be created.
+#
 #* @openeo-process
 export_cube <- function(data, name, folder) {
     base::message("[export_cube] START")
@@ -2268,6 +2924,17 @@ export_cube <- function(data, name, folder) {
     data
 }
 
+# Load cube RDS from user workspace (inverse of export_cube).
+#
+# Args:
+#   name: RDS stem; folder: workspace subfolder containing .obj/name.rds.
+#
+# Returns:
+#   sits cube.
+#
+# Raises:
+#   openeocraft::api_stop(500) if folder or file missing.
+#
 #* @openeo-process
 import_cube <- function(name, folder) {
     base::message("[import_cube] START")
@@ -2291,6 +2958,17 @@ import_cube <- function(name, folder) {
     data
 }
 
+# Save trained model RDS under workspace folder and write minimal STAC collection.
+#
+# Args:
+#   model: Trained sits model; name: stem for .rds; folder: workspace path.
+#
+# Returns:
+#   model (unchanged).
+#
+# Raises:
+#   openeocraft::api_stop(500) if folder creation fails.
+#
 #* @openeo-process
 export_ml_model <- function(model, name, folder) {
     base::message("[export_ml_model] START")
@@ -2332,6 +3010,17 @@ export_ml_model <- function(model, name, folder) {
     model
 }
 
+# Load model RDS from workspace (inverse of export_ml_model).
+#
+# Args:
+#   name, folder: Same as export_ml_model.
+#
+# Returns:
+#   Model object.
+#
+# Raises:
+#   openeocraft::api_stop(500) if missing.
+#
 #* @openeo-process
 import_ml_model <- function(name, folder) {
     base::message("[import_ml_model] START")
@@ -2355,6 +3044,18 @@ import_ml_model <- function(name, folder) {
     data
 }
 
+# Persist model to job and public STAC MLM items; update models collection JSON.
+#
+# Args:
+#   data: Trained model with optional mlm_* attributes from ml_fit.
+#   name: Model id / filename stem; options: MLM overrides and optional code_asset.
+#
+# Returns:
+#   TRUE on success; FALSE on non-HTTP runtime errors inside tryCatch.
+#
+# Raises:
+#   openeocraft::api_stop on validation; rethrows api errors from inner tryCatch.
+#
 #* @openeo-process
 save_ml_model <- function(data, name, options = list()) {
     base::message("[save_ml_model] START")
@@ -2655,6 +3356,26 @@ save_ml_model <- function(data, name, options = list()) {
                 assets[[code_asset_info$name]] <- code_asset
             }
 
+            # Optional tuning trace from ml_tune_* (same job); not part of MLM spec.
+            tuning_results_fn <- "tuning_results.json"
+            tuning_src <- base::file.path(job_dir, tuning_results_fn)
+            if (base::file.exists(tuning_src)) {
+                tuning_public <- base::file.path(public_models_dir, tuning_results_fn)
+                base::file.copy(tuning_src, tuning_public, overwrite = TRUE)
+                tuning_href <- openeocraft::make_job_files_url(
+                    host = host,
+                    user = env$user,
+                    job_id = env$job$id,
+                    file = tuning_results_fn
+                )
+                assets[[tuning_results_fn]] <- list(
+                    href = tuning_href,
+                    type = "application/json",
+                    roles = list("data"),
+                    title = "Hyperparameter tuning results (all runs and scores)"
+                )
+            }
+
             stac_item$assets <- assets
 
             # Create item filename based on model name
@@ -2677,6 +3398,9 @@ save_ml_model <- function(data, name, options = list()) {
             # Save public STAC Item (token-free, relative model href)
             public_stac_item <- stac_item
             public_stac_item$assets[[model_filename]]$href <- model_filename
+            if (tuning_results_fn %in% base::names(public_stac_item$assets)) {
+                public_stac_item$assets[[tuning_results_fn]]$href <- tuning_results_fn
+            }
             public_item_json_path <- base::file.path(public_models_dir, item_filename)
             jsonlite::write_json(
                 x = public_stac_item,
@@ -2790,6 +3514,18 @@ save_ml_model <- function(data, name, options = list()) {
     return(result)
 }
 
+# Load ML model from STAC Item (URL or path) with mlm extension; resolve model asset href.
+#
+# Args:
+#   uri: HTTPS URL or path relative to workspace/job; model_asset: optional asset key;
+#   input_index, output_index: stored as attributes on returned model.
+#
+# Returns:
+#   RDS model with attrs stac_item, input_index, output_index.
+#
+# Raises:
+#   openeocraft::api_stop for missing files, invalid STAC, download failures.
+#
 #* @openeo-process
 load_stac_ml <- function(uri,
                          model_asset = NULL,
@@ -3054,6 +3790,17 @@ load_stac_ml <- function(uri,
     )
 }
 
+# Resolve model id to an RDS file under job or workspace models/ directories.
+#
+# Args:
+#   id: Model name or path-like id matching ^[\\w\\-\\.~/]+$.
+#
+# Returns:
+#   Loaded model from readRDS.
+#
+# Raises:
+#   openeocraft::api_stop(400/404) for invalid id or not found.
+#
 #* @openeo-process
 load_ml_model <- function(id) {
     base::message("[load_ml_model] START")
