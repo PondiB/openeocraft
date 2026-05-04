@@ -278,7 +278,13 @@ new_token <- function(credentials, user, valid_days = 30) {
 #' @rdname credential_helpers
 #' @export
 get_token <- function(req) {
-    gsub("^.*//", "", req$HTTP_AUTHORIZATION)
+    auth <- req$HTTP_AUTHORIZATION
+    if (is.null(auth) || !nzchar(auth)) {
+        return(character())
+    }
+    auth <- trimws(auth)
+    auth <- sub("^Bearer[[:space:]]+", "", auth, ignore.case = TRUE)
+    gsub("^.*//", "", auth)
 }
 #' @rdname credential_helpers
 #' @export
@@ -325,6 +331,20 @@ api_user_workspace <- function(api, user) {
     }
     workspace_dir
 }
+
+#' Build the evaluation `list` for process graph execution
+#'
+#' Produces a list with `openeocraft = TRUE` and slots `api`, `user`, `job`, and
+#' `req`. [run_pgraph()] uses this as `envir` for `eval()`; [current_env()]
+#' searches parent frames for `openeocraft` to recover the same slots.
+#'
+#' @param api API object.
+#' @param user Authenticated user identifier.
+#' @param job Job metadata (`list`, includes at least `id`).
+#' @param req Plumber request object.
+#' @return A `list` suitable as `envir` in [run_pgraph()].
+#' @seealso [run_pgraph()], [current_env()]
+#' @keywords internal
 create_env <- function(api, user, job, req) {
     list(
         openeocraft = TRUE,
