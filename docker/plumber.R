@@ -245,13 +245,26 @@ function(req, res, job_id) {
 
 #* Lists batch job results
 #* @param job_id job identifier
+#* @param partial return partial results if job is not finished
 #* @serializer unboxedJSON
 #* @get /jobs/<job_id:str>/results
-function(req, res, job_id) {
+function(req, res, job_id, partial = FALSE) {
   print("GET /jobs/<jobid>/results")
   token <- get_token(req)
   user <- get_token_user(api, token)
-  job_get_results(api, user, job_id)
+  if ("partial" %in% names(req$args)) {
+    partial <- req$args$partial
+  }
+  job_get_results(api, user, job_id, partial = partial, req = req)
+}
+
+#* Cancel batch job processing / clear results
+#* @param job_id job identifier
+#* @serializer unboxedJSON
+#* @delete /jobs/<job_id:str>/results
+function(req, res, job_id) {
+  print("DELETE /jobs/<jobid>/results")
+  api_job_cancel_results(api, req, res, job_id)
 }
 
 #* Get an estimate for a batch job
@@ -288,6 +301,22 @@ function(req, res) {
   print("GET /file_formats")
   doc <- api_file_formats(api, req, res)
   doc
+}
+
+#* Authenticated user information
+#* @serializer unboxedJSON
+#* @get /me
+function(req, res) {
+  print("GET /me")
+  api_me(api, req, res)
+}
+
+#* OpenID Connect discovery (providers may be empty)
+#* @serializer unboxedJSON
+#* @get /credentials/oidc
+function(req, res) {
+  print("GET /credentials/oidc")
+  api_credentials_oidc(api, req, res)
 }
 
 # NOTE:

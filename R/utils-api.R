@@ -83,12 +83,23 @@ api_error_handler <- function(req, res, err) {
     if (is.null(err$status)) err$status <- 500
     if (is.null(err$message)) err$message <- "Internal server error"
     res$status <- err$status
-    list(code = err$status, message = paste("Error:", err$message))
+    if (identical(as.integer(err$status), 401L)) {
+        res$setHeader("WWW-Authenticate", "Basic, Bearer")
+    }
+    out <- list(
+        id = if (!is.null(err$id)) err$id else paste0("HTTP", err$status),
+        code = err$status,
+        message = paste("Error:", err$message)
+    )
+    if (!is.null(err$links)) {
+        out$links <- err$links
+    }
+    out
 }
 #' @rdname api_helpers
 #' @export
-api_stop <- function(status, ...) {
-    stop(errorCondition(paste0(...), status = status))
+api_stop <- function(status, ..., id = NULL) {
+    stop(errorCondition(paste0(...), status = status, id = id))
 }
 #' @rdname api_helpers
 #' @export
@@ -299,13 +310,26 @@ get_token <- function(req) {
     }
     auth <- trimws(auth)
     auth <- sub("^Bearer[[:space:]]+", "", auth, ignore.case = TRUE)
-    gsub("^.*//", "", auth)
+    # openEO bearer format: method/identityProviderId/token
+    # Also accept legacy bare tokens for existing clients/tests.
+    if (grepl("^[^/]*/[^/]*/.+$", auth)) {
+        parts <- strsplit(auth, "/", fixed = TRUE)[[1]]
+        return(paste(parts[-(1:2)], collapse = "/"))
+    }
+    if (grepl("/", auth, fixed = TRUE)) {
+        # Malformed method/provider/token shape
+        return(NA_character_)
+    }
+    auth
 }
 #' @rdname credential_helpers
 #' @export
 get_token_user <- function(api, token) {
-    if (!length(token)) {
+    if (!length(token) || (length(token) == 1L && !nzchar(token))) {
         api_stop(401L, "Token is missing")
+    }
+    if (length(token) == 1L && is.na(token)) {
+        api_stop(403L, "Invalid token format")
     }
     file <- api_attr(api, "credentials")
     if (is.null(file)) {
@@ -316,13 +340,32 @@ get_token_user <- function(api, token) {
         stop("Credential file not found", call. = FALSE)
     }
     if (!token %in% names(credentials$tokens)) {
-        api_stop(401L, "Invalid token")
+        api_stop(403L, "Invalid token")
     }
     if (Sys.time() > credentials$tokens[[token]]$expiry) {
-        api_stop(401L, "Token expired")
+        api_stop(403L, "Token expired")
     }
     user <- credentials$tokens[[token]]$user
     user
+}
+
+#' Reject paid plans when billing is not configured
+#'
+#' Free / empty plans always succeed. Non-free plans fail until billing is
+#' productized (see DEVELOPMENT.md).
+#'
+#' @param plan Character plan name from the job or request.
+#' @keywords internal
+assert_payment_allowed <- function(plan = "Free") {
+    plan_norm <- tolower(trimws(as.character(plan %||% "Free")))
+    if (!nzchar(plan_norm) || plan_norm %in% c("free")) {
+        return(invisible(TRUE))
+    }
+    api_stop(
+        402L,
+        "Payment required for plan '", plan, "'",
+        id = "PaymentRequired"
+    )
 }
 api_workdir <- function(api) {
     api$work_dir

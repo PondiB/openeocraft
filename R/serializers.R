@@ -64,12 +64,12 @@ get_serializer.openeo_gtiff <- function(data) {
     plumber::serializer_content_type("image/tiff", .serializer_read_file)
 }
 
-#' @describeIn get_serializer NetCDF / octet-stream file body
+#' @describeIn get_serializer NetCDF file body (\code{application/netcdf})
 #' @param data Result object with class `openeo_netcdf`.
 #' @export
 get_serializer.openeo_netcdf <- function(data) {
     plumber::serializer_content_type(
-        "application/octet-stream",
+        "application/netcdf",
         .serializer_read_file
     )
 }

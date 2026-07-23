@@ -37,7 +37,7 @@ Choose a plumber serializer for an openEO result object
 
 \item \code{get_serializer(openeo_gtiff)}: GeoTIFF bytes with \code{image/tiff} content type
 
-\item \code{get_serializer(openeo_netcdf)}: NetCDF / octet-stream file body
+\item \code{get_serializer(openeo_netcdf)}: NetCDF file body (\code{application/netcdf})
 
 \item \code{get_serializer(openeo_tar)}: Tar archive with \code{application/x-tar}
 

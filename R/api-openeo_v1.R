@@ -48,22 +48,34 @@ api_wellknown.openeo_v1 <- function(api, req, res) {
 }
 #' @export
 api_landing_page.openeo_v1 <- function(api, req, res) {
-    # Billing metadata is deferred (see DEVELOPMENT.md roadmap).
     doc <- list(
         type = "Catalog",
         id = api$id,
         title = api$title,
         description = api$description,
         backend_version = api$backend_version,
-        stac_version = api$stac_api$get("stac_version"),
+        stac_version = if (is.null(api$stac_api)) {
+            "1.0.0"
+        } else {
+            api$stac_api$get("stac_version")
+        },
         api_version = api$api_version,
         production = api$production,
         endpoints = get_endpoints(api),
-        conformsTo = api$conforms_to
+        conformsTo = api$conforms_to,
+        billing = list(
+            currency = "EUR",
+            default_plan = "free",
+            plans = list(
+                list(
+                    name = "free",
+                    description = "Free plan with no monetary charges"
+                )
+            )
+        )
     )
-    # Core openEO / OGC links below. Optional rels (terms-of-service,
-    # privacy-policy, create-form, recovery-form) need product content;
-    # tracked in DEVELOPMENT.md.
+    # Optional rels (terms-of-service, privacy-policy, create-form,
+    # recovery-form) need product content; tracked in DEVELOPMENT.md.
 
     doc <- link_root(doc, api, req)
     doc <- link_self(doc, api, req, "application/json")
@@ -131,28 +143,50 @@ api_result.openeo_v1 <- function(api, req, res) {
     token <- get_token(req)
     user <- get_token_user(api, token)
     pg <- req$body
+    if (is.null(pg)) {
+        api_stop(400L, "Missing process graph", id = "ProcessGraphMissing")
+    }
+    # Accept either a process graph wrapper or a job-like body with `process`
+    process <- pg
+    if (is.list(pg) && "process" %in% names(pg) && !is_pgraph(pg)) {
+        process <- pg$process
+    }
+    if (!is_pgraph(process)) {
+        api_stop(400L, "Invalid process graph", id = "ProcessGraphInvalid")
+    }
+    assert_payment_allowed(pg$plan %||% "Free")
 
     job_id <- job_sync_id()
     job <- list(
         id = job_id,
         title = "syncronous job",
         description = "syncronous job",
-        process = pg,
+        process = process,
         status = "created",
         created = Sys.time(),
-        plan = "Free",
-        budget = 0.0,
-        log_level = "Info",
+        plan = pg$plan %||% "Free",
+        budget = pg$budget %||% 0.0,
+        log_level = pg$log_level %||% "Info",
         links = list()
     )
-    # Directory first, then atomic jobs.rds index write (see atomic_save_rds).
-    # Cross-process locking is deferred; see DEVELOPMENT.md.
     job_new_dir(api, user, job)
     job_crt_rds(api, user, job)
     job_sync(api, req, user, job_id)
 
+    finished <- job_get(api, user, job_id)
+    if (identical(finished$status, .job_status_error)) {
+        logs <- logs_read_rds(api, user, job_id)
+        msg <- if (length(logs)) {
+            logs[[length(logs)]]$message
+        } else {
+            "Synchronous job failed"
+        }
+        api_stop(400L, msg, id = "JobError")
+    }
+
     job_dir <- job_get_dir(api, user, job_id)
     result_files <- list.files(job_dir, pattern = "^[^_]", full.names = TRUE)
+    res$status <- 200L
     if (length(result_files) == 1) {
         result <- structure(
             list(data = result_files),
@@ -267,11 +301,12 @@ api_job_start.openeo_v1 <- function(api, req, res, job_id) {
     token <- get_token(req)
     user <- get_token_user(api, token)
     jobs <- job_read_rds(api, user)
-    # Check if the job_id exists in the jobs_list
     if (!(job_id %in% names(jobs))) {
         api_stop(404L, "Job not found")
     }
+    assert_payment_allowed(jobs[[job_id]]$plan %||% "Free")
     if (identical(jobs[[job_id]]$status, .job_status_finished)) {
+        res$status <- 202L
         return(list(
             id = job_id,
             message = "Job already finished",
@@ -285,6 +320,7 @@ api_job_start.openeo_v1 <- function(api, req, res, job_id) {
             error = function(e) FALSE
         )
         if (alive) {
+            res$status <- 202L
             return(list(
                 id = job_id,
                 message = "Job already started",
@@ -293,13 +329,36 @@ api_job_start.openeo_v1 <- function(api, req, res, job_id) {
         }
     }
 
-    # Worker queue / max concurrency deferred; see DEVELOPMENT.md.
     proc <- job_async(api, req, user, job_id)
 
     procs[[job_id]] <- proc
     procs_save_rds(api, procs)
     res$status <- 202L
     list()
+}
+#' @export
+api_job_cancel_results.openeo_v1 <- function(api, req, res, job_id) {
+    token <- get_token(req)
+    user <- get_token_user(api, token)
+    job_cancel_results(api, user, job_id)
+    res$status <- 202L
+    list()
+}
+#' @export
+api_me.openeo_v1 <- function(api, req, res) {
+    token <- get_token(req)
+    user <- get_token_user(api, token)
+    list(
+        user_id = user,
+        name = user,
+        default_plan = "free"
+    )
+}
+#' @export
+api_credentials_oidc.openeo_v1 <- function(api, req, res) {
+    # Discovery stub: no identity providers configured yet.
+    # Full OIDC login remains deferred (see DEVELOPMENT.md).
+    list(providers = list())
 }
 #' @export
 api_file_formats.openeo_v1 <- function(api, req, res) {

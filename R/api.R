@@ -253,5 +253,20 @@ api_job_start <- function(api, req, res, job_id) {
 api_file_formats <- function(api, req, res) {
     UseMethod("api_file_formats", api)
 }
-# Deferred openEO endpoints (UDF runtimes, OIDC, /me, process_graphs, …):
+#' @rdname api_handling
+#' @export
+api_me <- function(api, req, res) {
+    UseMethod("api_me", api)
+}
+#' @rdname api_handling
+#' @export
+api_credentials_oidc <- function(api, req, res) {
+    UseMethod("api_credentials_oidc", api)
+}
+#' @rdname api_handling
+#' @export
+api_job_cancel_results <- function(api, req, res, job_id) {
+    UseMethod("api_job_cancel_results", api)
+}
+# Deferred openEO endpoints (UDF runtimes, process_graphs CRUD, …):
 # see DEVELOPMENT.md "Roadmap / TODO triage".

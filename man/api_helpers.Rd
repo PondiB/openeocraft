@@ -15,7 +15,7 @@ api_cors_handler(req, res, origin = "*", methods = "*")
 
 api_error_handler(req, res, err)
 
-api_stop(status, ...)
+api_stop(status, ..., id = NULL)
 
 api_success(status, ...)
 

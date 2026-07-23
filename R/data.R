@@ -25,7 +25,7 @@ data_serializer.openeo_gtiff <- function(x, res) {
 }
 #' @export
 data_serializer.openeo_netcdf <- function(x, res) {
-    res$setHeader("Content-Type", "application/octet-stream")
+    res$setHeader("Content-Type", "application/netcdf")
     res$body <- readBin(x$data, what = "raw", n = file.info(x$data)$size)
     res
 }
@@ -83,7 +83,7 @@ ext_content_type <- function(filename) {
     ext <- gsub(".*\\.([^.]+)$", "\\1", filename)
     switch(ext,
         tif = "image/tiff",
-        nc = "application/octet-stream",
+        nc = "application/netcdf",
         rds = "application/rds",
         json = "application/json"
     )
@@ -94,7 +94,7 @@ format_content_type <- function(format) {
     format <- tolower(format)
     switch(format,
         gtiff = "image/tiff",
-        netcdf = "application/octet-stream",
+        netcdf = "application/netcdf",
         rds = "application/rds",
         json = "application/json"
     )

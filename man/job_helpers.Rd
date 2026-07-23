@@ -25,9 +25,9 @@ job_delete(api, user, job_id)
 
 job_estimate(api, user, job_id)
 
-job_logs(api, user, job_id, offset = 0, level = "info", limit = 10)
+job_logs(api, user, job_id, offset = NULL, level = "info", limit = 10)
 
-job_get_results(api, user, job_id)
+job_get_results(api, user, job_id, partial = FALSE, req = NULL)
 
 job_empty_collection(api, user, job)
 }

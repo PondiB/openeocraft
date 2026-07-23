@@ -17,6 +17,9 @@
 \alias{api_job_create}
 \alias{api_job_start}
 \alias{api_file_formats}
+\alias{api_me}
+\alias{api_credentials_oidc}
+\alias{api_job_cancel_results}
 \alias{api_result.openeo_v1}
 \title{Handle API requests}
 \usage{
@@ -80,6 +83,12 @@ api_job_create(api, req, res)
 api_job_start(api, req, res, job_id)
 
 api_file_formats(api, req, res)
+
+api_me(api, req, res)
+
+api_credentials_oidc(api, req, res)
+
+api_job_cancel_results(api, req, res, job_id)
 
 \method{api_result}{openeo_v1}(api, req, res)
 }

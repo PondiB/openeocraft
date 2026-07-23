@@ -189,11 +189,17 @@ logs_save_rds <- function(api, user, job_id, logs) {
 # DEVELOPMENT.md roadmap. Required args stay before `...`.
 log_append <- function(api, user, job_id, code, level, message, ...) {
     logs <- logs_read_rds(api, user, job_id)
+    msg <- as.character(message)[[1]]
+    msg_short <- strsplit(msg, "\n", fixed = TRUE)[[1]][[1]]
+    if (nchar(msg_short) > 500L) {
+        msg_short <- paste0(substr(msg_short, 1L, 497L), "...")
+    }
+    entry_id <- paste0(job_id, "-", length(logs) + 1L)
     logs[[length(logs) + 1]] <- list(
-        id = job_id,
+        id = entry_id,
         code = code,
         level = level,
-        message = message,
+        message = msg_short,
         time = Sys.time(), ...
     )
     logs_save_rds(api, user, job_id, logs)
@@ -214,20 +220,24 @@ job_sync <- function(api, req, user, job_id) {
                 code <- e$code
             }
 
-            process_str <- deparse(job$process, width.cutoff = 500L)
+            # Concise client log + optional call detail via `data`
             call_str <- tryCatch(
                 paste(deparse(conditionCall(e)), collapse = " "),
                 error = function(err) NULL
             )
-            error_parts <- c(e$message)
+            detail <- list()
             if (!is.null(call_str) && nzchar(call_str) && call_str != "NULL") {
-                error_parts <- c(error_parts, paste("Call:", call_str))
+                detail$call <- call_str
             }
-            error_parts <- c(error_parts, process_str)
-            error_str <- paste(error_parts, collapse = "\n")
-
             job_upd_status(api, user, job_id, .job_status_error)
-            log_append(api, user, job_id, code, "error", error_str)
+            if (length(detail)) {
+                log_append(
+                    api, user, job_id, code, "error", e$message,
+                    data = detail
+                )
+            } else {
+                log_append(api, user, job_id, code, "error", e$message)
+            }
             invisible(NULL)
         }
     )
@@ -388,12 +398,10 @@ job_estimate <- function(api, user, job_id) {
 job_logs <- function(api,
                      user,
                      job_id,
-                     offset = 0,
+                     offset = NULL,
                      level = "info",
                      limit = 10) {
     level_list <- c("error", "warning", "info", "debug")
-    offset <- as.integer(offset)
-    if (is.na(offset)) offset <- 0
     if (!level %in% level_list) {
         api_stop(
             400L, "level must be one of ",
@@ -401,35 +409,225 @@ job_logs <- function(api,
         )
     }
     limit <- as.integer(limit)
-    if (limit < 1) {
+    if (is.na(limit) || limit < 1) {
         api_stop(400L, "limit parameter must be >= 1")
     }
     logs <- logs_read_rds(api, user, job_id)
+    # Normalize entries for openEO (unique id, short message, level, time)
+    logs <- lapply(seq_along(logs), function(i) {
+        log <- logs[[i]]
+        msg <- as.character(log$message %||% "")
+        # Keep client-facing message concise (no full stack / process dump)
+        msg_short <- strsplit(msg, "\n", fixed = TRUE)[[1]][[1]]
+        if (nchar(msg_short) > 500L) {
+            msg_short <- paste0(substr(msg_short, 1L, 497L), "...")
+        }
+        entry <- list(
+            id = log$id %||% paste0(job_id, "-", i),
+            level = log$level %||% "info",
+            message = msg_short,
+            time = log$time %||% Sys.time(),
+            code = log$code
+        )
+        # openEO log entries may carry a `data` field (e.g. error call detail)
+        if (!is.null(log$data)) {
+            entry$data <- log$data
+        }
+        entry
+    })
     levels <- vapply(logs, \(log) log$level, character(1))
     selection <- match(levels, level_list) <= match(level, level_list)
-    list(level = level, logs = logs[selection], links = list())
+    logs <- logs[selection]
+
+    # offset: return entries after the given log id (openEO pagination)
+    if (!is.null(offset) && !(is.character(offset) && !nzchar(offset))) {
+        offset <- as.character(offset)
+        ids <- vapply(logs, \(log) as.character(log$id), character(1))
+        idx <- match(offset, ids)
+        if (!is.na(idx)) {
+            logs <- if (idx < length(logs)) logs[(idx + 1L):length(logs)] else list()
+        } else {
+            # Numeric offset: skip first N entries
+            off_n <- suppressWarnings(as.integer(offset))
+            if (!is.na(off_n) && off_n >= 0L) {
+                if (off_n >= length(logs)) {
+                    logs <- list()
+                } else if (off_n > 0L) {
+                    logs <- logs[(off_n + 1L):length(logs)]
+                }
+            }
+        }
+    }
+    if (length(logs) > limit) {
+        logs <- logs[seq_len(limit)]
+    }
+    list(level = level, logs = unname(logs), links = list())
 }
 
 #' @rdname job_helpers
 #' @export
-job_get_results <- function(api, user, job_id) {
+job_get_results <- function(api, user, job_id, partial = FALSE, req = NULL) {
     jobs <- job_read_rds(api, user)
-    # Check if the job_id exists in the jobs_list
     if (!(job_id %in% names(jobs))) {
         api_stop(404L, "Job not found")
     }
     job <- jobs[[job_id]]
     if (job$status == .job_status_error) {
-        api_stop(424, "Job returned an error")
+        api_stop(424L, "Job returned an error", id = "JobError")
     }
-    results_path <- file.path(job_get_dir(api, user, job_id))
+    results_path <- job_get_dir(api, user, job_id)
     if (!dir.exists(results_path)) {
         api_stop(404L, "No results found")
     }
-    if (job$status != "finished") {
-        return(job_empty_collection(api, user, job))
+    partial <- isTRUE(partial) || identical(tolower(as.character(partial)), "true")
+    if (job$status != .job_status_finished) {
+        if (!partial) {
+            api_stop(
+                400L,
+                "Job has not finished processing yet",
+                id = "JobNotFinished"
+            )
+        }
+        collection <- job_empty_collection(api, user, job)
+    } else {
+        collection_file <- file.path(results_path, "_collection.json")
+        if (!file.exists(collection_file)) {
+            api_stop(404L, "No results found")
+        }
+        collection <- jsonlite::read_json(collection_file)
     }
-    jsonlite::read_json(file.path(results_path, "_collection.json"))
+    if (is.list(collection$assets) && length(collection$assets)) {
+        anames <- names(collection$assets)
+        if (is.null(anames)) {
+            anames <- as.character(seq_along(collection$assets))
+        }
+        for (i in seq_along(collection$assets)) {
+            if (is.null(collection$assets[[i]]$title)) {
+                collection$assets[[i]]$title <- anames[[i]]
+            }
+        }
+    }
+    expires_at <- Sys.time() + 3600
+    collection$expires <- format(expires_at, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    if (is.null(collection$links) || !is.list(collection$links)) {
+        collection$links <- list()
+    }
+    if (!is.null(req)) {
+        host <- get_host(api, req)
+        collection <- update_link(
+            collection,
+            rel = "canonical",
+            href = make_job_files_url(
+                host, user, job_id,
+                file = "_collection.json"
+            ),
+            type = "application/json"
+        )
+        collection <- update_link(
+            collection,
+            rel = "self",
+            href = make_url(host, "/jobs/", job_id, "/results"),
+            type = "application/json"
+        )
+    }
+    # Prefer a real extent inferred from the output rasters over a fabricated
+    # world bbox. Only fills in when the collection lacks its own extent and
+    # inference from files succeeds; otherwise left absent.
+    if (job$status == .job_status_finished &&
+        (is.null(collection$extent) || !length(collection$extent))) {
+        inferred <- infer_results_extent(api, user, job_id)
+        if (!is.null(inferred)) {
+            collection$extent <- inferred
+        }
+    }
+    if (is.null(collection$stac_version)) {
+        collection$stac_version <- "1.0.0"
+    }
+    collection
+}
+
+#' Infer a STAC extent from a finished job's raster outputs
+#'
+#' Reads the on-disk raster results (`.tif` / `.nc`) and computes their combined
+#' bounding box reprojected to EPSG:4326. Returns `NULL` when there are no
+#' raster files or `terra` is unavailable, so callers avoid fabricating an
+#' extent. The temporal interval is left open (`[null, null]`) since it cannot
+#' be inferred from the raster footprint alone.
+#'
+#' @inheritParams job_helpers
+#' @return A STAC `extent` list, or `NULL`.
+#' @keywords internal
+infer_results_extent <- function(api, user, job_id) {
+    if (!requireNamespace("terra", quietly = TRUE)) {
+        return(NULL)
+    }
+    job_dir <- job_get_dir(api, user, job_id)
+    files <- list.files(
+        job_dir,
+        pattern = "\\.(tif|tiff|nc)$",
+        ignore.case = TRUE,
+        full.names = TRUE
+    )
+    files <- files[!startsWith(basename(files), "_")]
+    if (!length(files)) {
+        return(NULL)
+    }
+    bbox <- tryCatch(
+        {
+            acc <- NULL
+            for (f in files) {
+                r <- terra::rast(f)
+                poly <- terra::as.polygons(terra::ext(r), crs = terra::crs(r))
+                poly <- terra::project(poly, "EPSG:4326")
+                ev <- as.vector(terra::ext(poly)) # xmin, xmax, ymin, ymax
+                vals <- c(ev[[1]], ev[[3]], ev[[2]], ev[[4]])
+                acc <- if (is.null(acc)) {
+                    vals
+                } else {
+                    c(
+                        min(acc[1], vals[1]), min(acc[2], vals[2]),
+                        max(acc[3], vals[3]), max(acc[4], vals[4])
+                    )
+                }
+            }
+            acc
+        },
+        error = function(e) NULL
+    )
+    if (is.null(bbox) || any(!is.finite(bbox))) {
+        return(NULL)
+    }
+    list(
+        spatial = list(bbox = list(as.numeric(bbox))),
+        temporal = list(interval = list(list(NULL, NULL)))
+    )
+}
+
+#' Cancel a running job and optionally clear result artefacts
+#'
+#' @inheritParams job_helpers
+#' @return `NULL`, invisibly.
+#' @keywords internal
+job_cancel_results <- function(api, user, job_id) {
+    jobs <- job_read_rds(api, user)
+    if (!(job_id %in% names(jobs))) {
+        api_stop(404L, "Job not found")
+    }
+    procs <- procs_read_rds(api)
+    proc <- procs[[job_id]]
+    if (!is.null(proc)) {
+        tryCatch(proc$kill(), error = function(e) NULL)
+        procs[[job_id]] <- NULL
+        procs_save_rds(api, procs)
+    }
+    job_dir <- job_get_dir(api, user, job_id)
+    if (dir.exists(job_dir)) {
+        files <- list.files(job_dir, full.names = TRUE, all.files = FALSE)
+        keep <- basename(files) %in% c("logs.rds")
+        unlink(files[!keep], recursive = TRUE)
+    }
+    job_upd_status(api, user, job_id, "canceled")
+    invisible(NULL)
 }
 #' @rdname job_helpers
 #' @export
