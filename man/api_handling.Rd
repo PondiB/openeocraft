@@ -20,6 +20,10 @@
 \alias{api_me}
 \alias{api_credentials_oidc}
 \alias{api_job_cancel_results}
+\alias{api_process_graphs_list}
+\alias{api_process_graph_get}
+\alias{api_process_graph_put}
+\alias{api_process_graph_delete}
 \alias{api_result.openeo_v1}
 \title{Handle API requests}
 \usage{
@@ -89,6 +93,14 @@ api_me(api, req, res)
 api_credentials_oidc(api, req, res)
 
 api_job_cancel_results(api, req, res, job_id)
+
+api_process_graphs_list(api, req, res)
+
+api_process_graph_get(api, req, res, process_graph_id)
+
+api_process_graph_put(api, req, res, process_graph_id)
+
+api_process_graph_delete(api, req, res, process_graph_id)
 
 \method{api_result}{openeo_v1}(api, req, res)
 }

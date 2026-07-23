@@ -176,6 +176,9 @@ TODO over leaving speculative notes in hot paths.
 | `format_content_type()` | Already implemented in `R/data.R` |
 | `/jobs` and `/processes` `limit` | Optional pagination + `self`/`next`/`prev` links |
 | `/processes` `links` | Includes `self` (and pagination links when limited) |
+| Process graph `from_parameter` | Nested UDP / callback parameter references |
+| `/process_graphs` CRUD | Per-user UDP store (`process_graphs.rds`) |
+| Process `namespace` + UDP-by-`process_id` | `user` namespace; predefined when `namespace` is null |
 
 ### Deferred (larger / product-dependent)
 
@@ -185,8 +188,9 @@ TODO over leaving speculative notes in hot paths.
 | Split eval environments / per-request process load | Isolation project; high blast radius |
 | Billing key on landing page | Needs product / config design |
 | Optional landing `rel`s (terms, privacy, create-form, …) | Product content; core links already present |
-| OIDC, `/me`, UDF runtimes, service types | Each is an openEO endpoint epic |
-| User-defined process graphs CRUD + `/validation` | Full UDP feature set |
+| OIDC login, UDF runtimes, service types | Each is an openEO endpoint epic |
+| URL-based process namespaces | Remote UDP fetch; L2 satisfied by `user` namespace |
+| `POST /validation` | Optional companion to UDP CRUD |
 | Collection queryables (openSTAC) | Depends on STAC backend |
 | sqlite / mongo job store | Only if file rename + locking prove insufficient |
 | Process path markers + `usage_*` metrics | Spec-nice; large instrumentation |

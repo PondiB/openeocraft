@@ -4,12 +4,14 @@
 \alias{pgraph_expr}
 \title{Turn a process graph into a single R expression}
 \usage{
-pgraph_expr(pg, parent = NULL)
+pgraph_expr(pg, parent = NULL, resolver = NULL)
 }
 \arguments{
 \item{pg}{A list passing \code{is_pgraph()}.}
 
 \item{parent}{Optional parent environment for nested graphs.}
+
+\item{resolver}{Optional process resolver from \code{\link[=make_process_resolver]{make_process_resolver()}}.}
 }
 \value{
 Language object (typically a nested \code{call}).

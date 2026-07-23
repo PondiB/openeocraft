@@ -268,5 +268,25 @@ api_credentials_oidc <- function(api, req, res) {
 api_job_cancel_results <- function(api, req, res, job_id) {
     UseMethod("api_job_cancel_results", api)
 }
-# Deferred openEO endpoints (UDF runtimes, process_graphs CRUD, …):
+#' @rdname api_handling
+#' @export
+api_process_graphs_list <- function(api, req, res) {
+    UseMethod("api_process_graphs_list", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graph_get <- function(api, req, res, process_graph_id) {
+    UseMethod("api_process_graph_get", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graph_put <- function(api, req, res, process_graph_id) {
+    UseMethod("api_process_graph_put", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graph_delete <- function(api, req, res, process_graph_id) {
+    UseMethod("api_process_graph_delete", api)
+}
+# Deferred openEO endpoints (UDF runtimes, …):
 # see DEVELOPMENT.md "Roadmap / TODO triage".

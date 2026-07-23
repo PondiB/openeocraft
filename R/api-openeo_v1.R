@@ -369,3 +369,47 @@ api_file_formats.openeo_v1 <- function(api, req, res) {
     }
     doc
 }
+#' @export
+api_process_graphs_list.openeo_v1 <- function(api, req, res) {
+    token <- get_token(req)
+    user <- get_token_user(api, token)
+    graphs <- process_graphs_read(api, user)
+    processes <- unname(lapply(graphs, process_graph_metadata))
+    doc <- list(processes = processes, links = list())
+    host <- get_host(api, req)
+    doc <- update_link(
+        doc,
+        rel = "self",
+        href = make_url(host, "/process_graphs"),
+        type = "application/json"
+    )
+    doc
+}
+#' @export
+api_process_graph_get.openeo_v1 <- function(api, req, res, process_graph_id) {
+    token <- get_token(req)
+    user <- get_token_user(api, token)
+    process_graph_get(api, user, process_graph_id)
+}
+#' @export
+api_process_graph_put.openeo_v1 <- function(api, req, res, process_graph_id) {
+    token <- get_token(req)
+    user <- get_token_user(api, token)
+    result <- process_graph_put(api, user, process_graph_id, req$body)
+    host <- get_host(api, req)
+    res$setHeader(
+        "Location",
+        make_url(host, "/process_graphs/", process_graph_id)
+    )
+    res$setHeader("OpenEO-Identifier", process_graph_id)
+    res$status <- if (result$created) 201L else 200L
+    list()
+}
+#' @export
+api_process_graph_delete.openeo_v1 <- function(api, req, res, process_graph_id) {
+    token <- get_token(req)
+    user <- get_token_user(api, token)
+    process_graph_delete(api, user, process_graph_id)
+    res$status <- 204L
+    list()
+}

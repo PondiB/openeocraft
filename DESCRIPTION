@@ -54,6 +54,7 @@ Collate:
     'api-openeo_v1.R'
     'collections.R'
     'jobs.R'
+    'process_graphs.R'
     'pgraphs.R'
     'mock.R'
     'runtime-config.R'

@@ -162,7 +162,8 @@ run_pgraph <- function(api, req, user, job, pg) {
     if ("process" %in% names(pg)) {
         pg <- pg$process
     }
-    expr <- pgraph_expr(pg)
+    resolver <- make_process_resolver(api, user)
+    expr <- pgraph_expr(pg, resolver = resolver)
     # create_env() injects api, user, job, and req into the eval frame.
     env <- create_env(api, user, job, req)
     eval(expr, envir = env, enclos = get_namespace(api))

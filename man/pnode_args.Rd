@@ -4,7 +4,7 @@
 \alias{pnode_args}
 \title{Convert each process argument to an R expression fragment}
 \usage{
-pnode_args(args, env)
+pnode_args(args, env, resolver = NULL)
 }
 \arguments{
 \item{args}{Named list of arguments from one node.}

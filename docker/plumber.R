@@ -319,6 +319,38 @@ function(req, res) {
   api_credentials_oidc(api, req, res)
 }
 
+#* List user-defined processes
+#* @serializer unboxedJSON
+#* @get /process_graphs
+function(req, res) {
+  print("GET /process_graphs")
+  api_process_graphs_list(api, req, res)
+}
+
+#* Get a user-defined process
+#* @serializer unboxedJSON
+#* @get /process_graphs/<process_graph_id:str>
+function(req, res, process_graph_id) {
+  print("GET /process_graphs/<id>")
+  api_process_graph_get(api, req, res, process_graph_id)
+}
+
+#* Create or replace a user-defined process
+#* @serializer unboxedJSON
+#* @put /process_graphs/<process_graph_id:str>
+function(req, res, process_graph_id) {
+  print("PUT /process_graphs/<id>")
+  api_process_graph_put(api, req, res, process_graph_id)
+}
+
+#* Delete a user-defined process
+#* @serializer unboxedJSON
+#* @delete /process_graphs/<process_graph_id:str>
+function(req, res, process_graph_id) {
+  print("DELETE /process_graphs/<id>")
+  api_process_graph_delete(api, req, res, process_graph_id)
+}
+
 # NOTE:
 #  this must be placed after endpoints to be shown in
 #  the land page, so that endpoints can be mapped properly
