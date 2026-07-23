@@ -6,7 +6,7 @@
 \alias{api_error_handler}
 \alias{api_stop}
 \alias{api_success}
-\alias{get_host}
+\alias{.openeocraft_default_api_base_url}
 \alias{get_path}
 \alias{get_method}
 \title{API helper functions}
@@ -19,7 +19,7 @@ api_stop(status, ...)
 
 api_success(status, ...)
 
-get_host(api, req)
+.openeocraft_default_api_base_url()
 
 get_path(req)
 

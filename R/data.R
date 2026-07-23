@@ -1,3 +1,13 @@
+#' Serialize a synchronous openEO result onto a plumber response
+#'
+#' Used by [api_result()] for `POST /result`. Binary formats read the file at
+#' `x$data` into `res$body` and set `Content-Type`. For the alternate plumber
+#' `@serializer serialize_result` path, see [get_serializer()].
+#'
+#' @param x S3 object with class `openeo_<format>` and a `data` file path.
+#' @param res Plumber response object.
+#' @return The updated `res`.
+#' @keywords internal
 data_serializer <- function(x, res) {
     UseMethod("data_serializer", x)
 }

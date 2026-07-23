@@ -78,24 +78,17 @@ The `plumber.R` file checks if `inst/ml/processes.R` exists:
 ```bash
 # List all processes
 curl http://127.0.0.1:8000/processes | jq '.processes[] | .id'
-
-# Check specific process
-curl http://127.0.0.1:8000/processes | jq '.processes[] | select(.id == "merge_cubes")'
 ```
 
-### From R client:
-```r
-library(openeo)
-connection <- connect("http://127.0.0.1:8000")
-p <- processes()
-
-# Check if process exists
-"merge_cubes" %in% names(p)
+### Quick package tests:
+```bash
+Rscript -e 'devtools::load_all(); testthat::test_dir("tests/testthat")'
 ```
 
 ## Adding New Processes
 
-1. Add function to `inst/ml/processes.R` with `#* @openeo-process` decorator:
+1. Add the R function with the decorator in `inst/ml/processes.R`:
+
 ```r
 #* @openeo-process
 my_new_process <- function(param1, param2 = NULL) {
@@ -108,6 +101,18 @@ my_new_process <- function(param1, param2 = NULL) {
 3. Restart server:
    - **Local mode**: Just restart `Rscript docker/server.R`
    - **Docker mode**: Run `docker-compose up --build -d`
+
+Auto-generated process JSON (when no hand-written file exists) includes
+`"_generated_by": "openeocraft"` so tooling can distinguish scaffolded
+descriptors from curated ones. Existing JSON files are never overwritten.
+
+## Result serializers (dual path)
+
+Synchronous `POST /result` sets the HTTP body via **`data_serializer.*`**
+methods in `R/data.R` (used by `api_result()`). Plumber’s registered
+`"serialize_result"` serializer dispatches through **`get_serializer.*`**
+in `R/serializers.R`. Keep both paths aligned when adding formats
+(GeoTIFF, NetCDF, RDS, tar, JSON).
 
 ## Troubleshooting
 
@@ -149,3 +154,46 @@ Rscript docker/server.R
 ✅ Both Docker and Local modes supported
 ✅ 27 processes registered
 
+## Roadmap / TODO triage
+
+Internal `# TODO` comments are triaged below so hardening stays additive and
+does not break existing clients. Prefer completing an item and deleting its
+TODO over leaving speculative notes in hot paths.
+
+### Done / clarified (safe hardening)
+
+| Area | Notes |
+|------|--------|
+| GeoTIFF plumber serializer | `get_serializer.openeo_gtiff` mirrors `data_serializer.openeo_gtiff` |
+| Sync multi-file tar | Packs basenames only (no absolute paths) |
+| Job list / info `links` | `self` (+ `results` when finished) |
+| Job start messages | Distinct “already finished” vs “already started” |
+| `export_ml_model` assets | Workspace href to saved `.rds` |
+| Soft `job_check` | Requires `process`; fills plan / log_level defaults |
+| Atomic `jobs.rds` / `logs.rds` | Temp file + rename |
+| Process JSON provenance | `_generated_by: openeocraft` on scaffold writes |
+| Token renewal | Already renews on expiry in `api_credential` |
+| `format_content_type()` | Already implemented in `R/data.R` |
+| `/jobs` and `/processes` `limit` | Optional pagination + `self`/`next`/`prev` links |
+| `/processes` `links` | Includes `self` (and pagination links when limited) |
+
+### Deferred (larger / product-dependent)
+
+| Item | Why deferred |
+|------|----------------|
+| Worker queue / max workers | Architecture + fairness; risk to running jobs |
+| Split eval environments / per-request process load | Isolation project; high blast radius |
+| Billing key on landing page | Needs product / config design |
+| Optional landing `rel`s (terms, privacy, create-form, …) | Product content; core links already present |
+| OIDC, `/me`, UDF runtimes, service types | Each is an openEO endpoint epic |
+| User-defined process graphs CRUD + `/validation` | Full UDP feature set |
+| Collection queryables (openSTAC) | Depends on STAC backend |
+| sqlite / mongo job store | Only if file rename + locking prove insufficient |
+| Process path markers + `usage_*` metrics | Spec-nice; large instrumentation |
+| OpenAPI response models | Low demand until typed clients need schemas |
+| `@openeo-import` / multi-file processes | Load-order and JSON layout design |
+| `limit` pagination on `/jobs` and `/processes` | Done — optional `limit`/`page`; omit `limit` returns all |
+| `register_file_format()` API | Additive; formats remain hardcoded for now |
+
+When picking up deferred work, add tests first and keep default request
+shapes backward-compatible (optional query params, soft validation only).

@@ -40,6 +40,10 @@ mock_req <- function(..., method = "GET") {
 
     # Extract headers
     headers <- vars[grepl("^HTTP_", names(vars))]
+    args <- vars$args
+    if (is.null(args)) {
+        args <- list()
+    }
 
     req <- c(
         list(
@@ -51,7 +55,8 @@ mock_req <- function(..., method = "GET") {
             HTTP_HOST = "localhost",
             SERVER_NAME = "localhost",
             SERVER_PORT = NULL,
-            PATH_INFO = paste0(paths, collapse = "/")
+            PATH_INFO = paste0(paths, collapse = "/"),
+            args = args
         ),
         # Add headers separately
         headers

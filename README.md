@@ -547,4 +547,8 @@ job.get_results().download_files("output")
 
 **Other workflows:** Random forest + Breizh-style alignment (constants shared with R) live in `inst/examples/breizh_openeo_training_predict_aligned.py`. Step-by-step notebooks: `inst/demo-lps-2025/`.
 
+## Development
+
+Local vs Docker workflows, process registration, and the **TODO / capabilities roadmap** (what was hardened vs deliberately deferred) live in [`DEVELOPMENT.md`](DEVELOPMENT.md).
+
 

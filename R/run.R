@@ -32,7 +32,8 @@
 load_processes <- function(api, processes_file) {
     stopifnot(file.exists(processes_file))
     setup_namespace(api)
-    # TODO: split environments
+    # Single shared process namespace; per-env isolation is deferred
+    # (see DEVELOPMENT.md).
     eval(parse(processes_file, encoding = "UTF-8"), envir = get_namespace(api))
     api_attr(api, "processes") <- list()
     process_decorators(api, processes_file, decorator = "openeo-process")
@@ -162,8 +163,7 @@ run_pgraph <- function(api, req, user, job, pg) {
         pg <- pg$process
     }
     expr <- pgraph_expr(pg)
-    # TODO: need to define a scope with api and user objects
-    # a possible solution is load the processes per request
+    # create_env() injects api, user, job, and req into the eval frame.
     env <- create_env(api, user, job, req)
     eval(expr, envir = env, enclos = get_namespace(api))
 }

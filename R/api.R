@@ -176,7 +176,7 @@ api_setup_plumber <- function(api,
                               docs_endpoint = "/docs",
                               wellknown_versions = list()) {
     stopifnot(is_absolute_url(api_base_url))
-    # TODO: replace all calls to `api_attr()` by proper functions
+    # Prefer dedicated getters/setters over raw api_attr() where they exist.
     api_attr(api, "plumber") <- pr
     api_attr(api, "api_base_url") <- api_base_url
     set_wellknown_versions(api, wellknown_versions)
@@ -253,17 +253,5 @@ api_job_start <- function(api, req, res, job_id) {
 api_file_formats <- function(api, req, res) {
     UseMethod("api_file_formats", api)
 }
-# TODO:
-# - Supported UDF runtimes `GET /udf_runtime`
-# - Supported secondary web service protocols `GET /service_types`
-# - OpenID Connect authentication `GET /credentials/oidc`
-# - HTTP Basic authentication `GET /credentials/basic`
-# - Information about the authenticated user `GET /me`
-# - (openstac) Metadata filters for a specific dataset
-#                   `GET /collections/{collection_id}/queryables`
-# - List all user-defined processes `GET /process_graphs`
-# - Full metadata for a user-defined process
-#                   `GET /process_graphs/{process_graph_id}`
-# - Validate a user-defined process (graph) `POST /validation`
-# - Store a user-defined process `PUT /process_graphs/{process_graph_id}`
-# - Delete a user-defined process `DELETE /process_graphs/{process_graph_id}`
+# Deferred openEO endpoints (UDF runtimes, OIDC, /me, process_graphs, …):
+# see DEVELOPMENT.md "Roadmap / TODO triage".

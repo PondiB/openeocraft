@@ -9,6 +9,43 @@
 job_sync_id <- function() {
     format(Sys.time(), "job-%Y%m%d")
 }
+#' Atomically write an RDS object (temp file + rename)
+#'
+#' @param object R object to serialize.
+#' @param file Destination path.
+#' @param fail_msg Message passed to [api_stop()] on failure.
+#' @return `NULL`, invisibly.
+#' @keywords internal
+atomic_save_rds <- function(object, file, fail_msg = "Could not save RDS file") {
+    dir <- dirname(file)
+    if (!dir.exists(dir)) {
+        dir.create(dir, recursive = TRUE)
+    }
+    tmp <- tempfile(pattern = "atomic_", tmpdir = dir, fileext = ".rds")
+    ok <- FALSE
+    on.exit({
+        if (!ok && file.exists(tmp)) {
+            unlink(tmp)
+        }
+    }, add = TRUE)
+    tryCatch(
+        {
+            saveRDS(object, tmp)
+            if (!file.rename(tmp, file)) {
+                if (!file.copy(tmp, file, overwrite = TRUE)) {
+                    api_stop(500L, fail_msg)
+                }
+                unlink(tmp)
+            }
+            ok <- TRUE
+        },
+        error = function(e) {
+            api_stop(500L, fail_msg)
+        }
+    )
+    invisible(NULL)
+}
+
 # list of named lists, each containing job details
 job_read_rds <- function(api, user) {
     file <- file.path(api_user_workspace(api, user), "jobs.rds")
@@ -20,9 +57,7 @@ job_read_rds <- function(api, user) {
 job_save_rds <- function(api, user, job, jobs) {
     jobs[[job$id]] <- job
     file <- file.path(api_user_workspace(api, user), "jobs.rds")
-    tryCatch(saveRDS(jobs, file), error = function(e) {
-        api_stop(500, "Could not save the jobs file")
-    })
+    atomic_save_rds(jobs, file, "Could not save the jobs file")
     invisible(NULL)
 }
 job_crt_rds <- function(api, user, job) {
@@ -56,9 +91,7 @@ job_delete_rds <- function(api, user, job, jobs) {
     }
     jobs[[job$id]] <- NULL
     file <- file.path(api_user_workspace(api, user), "jobs.rds")
-    tryCatch(saveRDS(jobs, file), error = function(e) {
-        api_stop(500, "Could not save the jobs index file")
-    })
+    atomic_save_rds(jobs, file, "Could not save the jobs index file")
 }
 #' Manage job artefacts and metadata
 #'
@@ -145,24 +178,16 @@ logs_read_rds <- function(api, user, job_id) {
 }
 logs_save_rds <- function(api, user, job_id, logs) {
     file <- file.path(api_user_workspace(api, user), "jobs", job_id, "logs.rds")
-    tryCatch(saveRDS(logs, file), error = function(e) NULL)
+    tryCatch(
+        atomic_save_rds(logs, file),
+        error = function(e) NULL
+    )
     invisible(NULL)
 }
 
-# TODO: include all possible fields in here. Required parameters
-#   must come before the `...` (ellipsis) parameter; optional parameters
-#   comes after
+# Optional openEO log fields (`path`, `usage`) via `...` are deferred; see
+# DEVELOPMENT.md roadmap. Required args stay before `...`.
 log_append <- function(api, user, job_id, code, level, message, ...) {
-    # TODO: log this
-    # - solution to `path` field:
-    # - introduce 'markers' into processes` function so that
-    #   using the traceback mechanism we can distinguish
-    #   functions that are processes from internal R functions.
-    #   Then we can use this to create a openEO traceback to
-    #   store in `path` field.
-    # - solution to `usage` field:
-    #   create `usage_*()` API to generate metrics to be included in
-    #   `usage` field.
     logs <- logs_read_rds(api, user, job_id)
     logs[[length(logs) + 1]] <- list(
         id = job_id,
@@ -183,11 +208,6 @@ job_sync <- function(api, req, user, job_id) {
             run_pgraph(api, req, user, job, job$process)
             job_upd_status(api, user, job_id, "finished")
         },
-        # TODO: add more information of errors:
-        # - traceback
-        # - implement proc_stop() function that store more details like
-        #   code?
-        # - implement proc_warning() function to update logs for warning
         error = function(e) {
             code <- 100
             if ("code" %in% names(e)) {
@@ -195,7 +215,16 @@ job_sync <- function(api, req, user, job_id) {
             }
 
             process_str <- deparse(job$process, width.cutoff = 500L)
-            error_str <- paste(c(e$message, process_str), collapse = "\n")
+            call_str <- tryCatch(
+                paste(deparse(conditionCall(e)), collapse = " "),
+                error = function(err) NULL
+            )
+            error_parts <- c(e$message)
+            if (!is.null(call_str) && nzchar(call_str) && call_str != "NULL") {
+                error_parts <- c(error_parts, paste("Call:", call_str))
+            }
+            error_parts <- c(error_parts, process_str)
+            error_str <- paste(error_parts, collapse = "\n")
 
             job_upd_status(api, user, job_id, .job_status_error)
             log_append(api, user, job_id, code, "error", error_str)
@@ -301,10 +330,7 @@ job_info <- function(api, user, job_id) {
 #' @rdname job_helpers
 #' @export
 job_update <- function(api, user, job_id, job) {
-    # TODO: all checks should be done in api_*() functions level
-    # TODO: implement job_check partial parameter that does the check
-    #   job fields independently.
-    # check job --> job_check(job, partial = TRUE)
+    job_check(job, partial = TRUE)
 
     jobs <- job_read_rds(api, user)
 
@@ -426,4 +452,71 @@ job_info_check <- function(job_info) {
     if (!all(c("title", "description", "process") %in% names(job_info))) {
         api_stop(400L, "Invalid job data")
     }
+}
+
+#' Soft validation and defaults for job payloads
+#'
+#' Requires `process` for full creates (not for `partial` updates). Does **not**
+#' require `title` / `description` so existing clients stay compatible. Fills
+#' `plan` and `log_level` defaults when missing on full creates.
+#'
+#' @param job_info Named list from the request body (or merge candidate).
+#' @param partial If `TRUE`, only validate fields that are present (PATCH-style).
+#' @return A normalized named list (full create) or `job_info` (partial).
+#' @keywords internal
+job_check <- function(job_info, partial = FALSE) {
+    if (is.null(job_info) || !is.list(job_info)) {
+        api_stop(400L, "Missing job information")
+    }
+    if (partial) {
+        if ("process" %in% names(job_info) && is.null(job_info$process)) {
+            api_stop(400L, "Invalid job information: 'process' must not be null")
+        }
+        return(job_info)
+    }
+    if (!"process" %in% names(job_info) || is.null(job_info$process)) {
+        api_stop(400L, "Invalid job information: 'process' is required")
+    }
+    list(
+        title = job_info$title,
+        description = job_info$description,
+        process = job_info$process,
+        plan = if (is.null(job_info$plan)) "Free" else job_info$plan,
+        budget = if (is.null(job_info$budget)) 0.0 else job_info$budget,
+        log_level = if (is.null(job_info$log_level)) {
+            "Info"
+        } else {
+            job_info$log_level
+        },
+        links = if (is.null(job_info$links)) list() else job_info$links
+    )
+}
+
+#' Attach openEO links to a job document
+#'
+#' @param job Job list (mutated links).
+#' @param api API object.
+#' @param req Plumber request.
+#' @return `job` with `self` and optional `results` links.
+#' @keywords internal
+job_populate_links <- function(job, api, req) {
+    if (is.null(job$links) || !is.list(job$links)) {
+        job$links <- list()
+    }
+    host <- get_host(api, req)
+    job <- update_link(
+        job,
+        rel = "self",
+        href = make_url(host, "/jobs/", job$id),
+        type = "application/json"
+    )
+    if (identical(job$status, .job_status_finished)) {
+        job <- update_link(
+            job,
+            rel = "results",
+            href = make_url(host, "/jobs/", job$id, "/results"),
+            type = "application/json"
+        )
+    }
+    job
 }

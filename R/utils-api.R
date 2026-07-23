@@ -177,7 +177,7 @@ get_plumber <- function(api) {
 #' @keywords internal
 setup_plumber_spec <- function(api, pr, spec_endpoint) {
     spec_handler <- function(req, res, ...) {
-        # TODO: add models
+        # OpenAPI component models deferred; see DEVELOPMENT.md.
         utils::modifyList(
             list(servers = list(list(
                 url = make_url(get_host(api, req))
@@ -382,8 +382,7 @@ create_env <- function(api, user, job, req) {
 #' }
 #' @export
 file_formats <- function() {
-    # TODO: improve file formats API enabling the registration of
-    #   additional formats
+    # Dynamic register_file_format() API deferred; see DEVELOPMENT.md.
     # Define the output formats
     output_formats <- list(
         GeoTiff = list(
@@ -516,4 +515,106 @@ make_workspace_files_url <- function(host, user, folder, file) {
     token <- base64enc::base64encode(charToRaw(user))
     file <- file.path("/files/root", folder, file)
     paste0(host, file, "?token=", token)
+}
+
+#' Parse optional openEO pagination query parameters
+#'
+#' `limit` omitted/empty means return all resources (openEO rule). When set it
+#' must be an integer `>= 1`. `page` defaults to `1`.
+#'
+#' @param req Plumber request (`req$args` holds query params).
+#' @return Integer limit, or `NULL` when pagination is off.
+#' @keywords internal
+parse_pagination_limit <- function(req) {
+    args <- req$args
+    if (is.null(args) || !"limit" %in% names(args)) {
+        return(NULL)
+    }
+    raw <- args$limit
+    if (is.null(raw) || (is.character(raw) && !nzchar(raw))) {
+        return(NULL)
+    }
+    limit <- suppressWarnings(as.integer(raw))
+    if (is.na(limit) || limit < 1L) {
+        api_stop(400L, "limit parameter must be >= 1")
+    }
+    limit
+}
+
+#' @rdname parse_pagination_limit
+#' @keywords internal
+parse_pagination_page <- function(req) {
+    args <- req$args
+    if (is.null(args) || !"page" %in% names(args)) {
+        return(1L)
+    }
+    raw <- args$page
+    if (is.null(raw) || (is.character(raw) && !nzchar(raw))) {
+        return(1L)
+    }
+    page <- suppressWarnings(as.integer(raw))
+    if (is.na(page) || page < 1L) {
+        api_stop(400L, "page parameter must be >= 1")
+    }
+    page
+}
+
+#' Slice a resource list and attach pagination links
+#'
+#' @param items List of resources.
+#' @param doc Document that already has a `links` list (e.g. with `self`).
+#' @param api API object.
+#' @param req Plumber request.
+#' @param endpoint Path such as `"/jobs"` or `"/processes"`.
+#' @param limit Optional page size (`NULL` = no pagination).
+#' @param page Page number (1-based).
+#' @return List with `items` (possibly sliced) and updated `doc` links.
+#' @keywords internal
+paginate_resource_list <- function(items, doc, api, req, endpoint,
+                                   limit = NULL, page = 1L) {
+    if (is.null(limit)) {
+        return(list(items = items, doc = doc))
+    }
+    total <- length(items)
+    total_pages <- max(1L, as.integer(ceiling(total / limit)))
+    page <- min(as.integer(page), total_pages)
+    from <- (page - 1L) * limit + 1L
+    to <- min(page * limit, total)
+    if (total == 0L || from > total) {
+        sliced <- list()
+    } else {
+        sliced <- items[from:to]
+    }
+    host <- get_host(api, req)
+    if (page < total_pages) {
+        doc <- add_link(
+            doc,
+            rel = "next",
+            href = make_url(host, endpoint, limit = limit, page = page + 1L),
+            type = "application/json"
+        )
+    }
+    if (page > 1L) {
+        doc <- add_link(
+            doc,
+            rel = "prev",
+            href = make_url(host, endpoint, limit = limit, page = page - 1L),
+            type = "application/json"
+        )
+        doc <- add_link(
+            doc,
+            rel = "first",
+            href = make_url(host, endpoint, limit = limit, page = 1L),
+            type = "application/json"
+        )
+    }
+    if (page < total_pages) {
+        doc <- add_link(
+            doc,
+            rel = "last",
+            href = make_url(host, endpoint, limit = limit, page = total_pages),
+            type = "application/json"
+        )
+    }
+    list(items = sliced, doc = doc)
 }

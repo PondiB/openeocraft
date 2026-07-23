@@ -179,5 +179,6 @@ job <- create_job(
 job <- start_job(job)
 res <- list_results(job)
 
-# TODO not working -- get stuck!
+# Example note: compute_result may hang depending on client/backend state;
+# prefer create_job + start_job for durable runs (see DEVELOPMENT.md).
 openeo::compute_result(cube, output_file = "i_dont_know", format = "GTiff")
