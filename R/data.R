@@ -69,7 +69,7 @@ format_ext <- function(format) {
 #' @rdname format_helpers
 #' @export
 ext_format <- function(filename) {
-    ext <- gsub("\\.([^.]+)$", "\\1", filename)
+    ext <- gsub(".*\\.([^.]+)$", "\\1", filename)
     switch(ext,
         tif = "gtiff",
         nc = "netcdf",

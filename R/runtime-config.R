@@ -13,7 +13,8 @@ configure_openeocraft_runtime <- function() {
         "TORCH_NUM_THREADS"
     )) {
         if (!nzchar(Sys.getenv(v, unset = ""))) {
-            Sys.setenv(v = "1")
+            args <- stats::setNames(list("1"), v)
+            do.call(Sys.setenv, args)
         }
     }
 
