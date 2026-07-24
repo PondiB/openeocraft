@@ -4,15 +4,17 @@
 \alias{pnode_expr}
 \title{Build a \code{call} for one process node}
 \usage{
-pnode_expr(node, env)
+pnode_expr(node, env, resolver = NULL)
 }
 \arguments{
 \item{node}{A process node list.}
 
 \item{env}{Environment for resolving \code{from_node} references.}
+
+\item{resolver}{Optional process resolver from \code{\link[=make_process_resolver]{make_process_resolver()}}.}
 }
 \value{
-A \code{call} object \code{process_id(...)}.
+A \code{call} object \code{process_id(...)} or an expanded UDP call.
 }
 \description{
 Build a \code{call} for one process node

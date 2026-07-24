@@ -4,7 +4,7 @@
 \alias{list_expr}
 \title{Build a \code{list(...)} call from process arguments}
 \usage{
-list_expr(args, env)
+list_expr(args, env, resolver = NULL)
 }
 \arguments{
 \item{args}{List of argument values.}

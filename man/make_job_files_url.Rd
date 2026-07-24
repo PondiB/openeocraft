@@ -21,3 +21,6 @@ A character string containing the absolute URL.
 \description{
 Build the download URL for a job artifact
 }
+\examples{
+make_job_files_url("https://example.com", "alice", "job1", "out.tif")
+}

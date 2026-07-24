@@ -17,6 +17,13 @@
 \alias{api_job_create}
 \alias{api_job_start}
 \alias{api_file_formats}
+\alias{api_me}
+\alias{api_credentials_oidc}
+\alias{api_job_cancel_results}
+\alias{api_process_graphs_list}
+\alias{api_process_graph_get}
+\alias{api_process_graph_put}
+\alias{api_process_graph_delete}
 \alias{api_result.openeo_v1}
 \title{Handle API requests}
 \usage{
@@ -80,6 +87,20 @@ api_job_create(api, req, res)
 api_job_start(api, req, res, job_id)
 
 api_file_formats(api, req, res)
+
+api_me(api, req, res)
+
+api_credentials_oidc(api, req, res)
+
+api_job_cancel_results(api, req, res, job_id)
+
+api_process_graphs_list(api, req, res)
+
+api_process_graph_get(api, req, res, process_graph_id)
+
+api_process_graph_put(api, req, res, process_graph_id)
+
+api_process_graph_delete(api, req, res, process_graph_id)
 
 \method{api_result}{openeo_v1}(api, req, res)
 }
@@ -149,6 +170,8 @@ the request.}
 \item{check_auth}{Check for authenticated user (\code{TRUE}) or not (\code{FALSE}).}
 
 \item{job_id}{The identifier for the job}
+
+\item{process_graph_id}{Identifier of a stored user-defined process.}
 }
 \value{
 For API creation functions, returns a api object. For API
@@ -181,6 +204,19 @@ of errors in the API.
 \item \code{api_conformance}: Creates document as a response to
 \verb{/conformance} endpoint.
 
+}
+}
+\examples{
+\donttest{
+api <- create_openeo_v1(
+    id = "demo",
+    title = "Demo",
+    description = "Demo API",
+    backend_version = "0.3.1",
+    stac_api = NULL,
+    work_dir = tempdir(),
+    production = FALSE
+)
 }
 }
 \references{

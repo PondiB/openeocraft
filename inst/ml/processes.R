@@ -1,4 +1,4 @@
-# TODO allow many files processes definition
+# Multi-file process definitions (`@openeo-import`) deferred; see DEVELOPMENT.md.
 #* @openeo-import math.R
 #* @openeo-import data.R
 
@@ -3355,7 +3355,6 @@ save_result <- function(data, format, options = NULL) {
             tile_assets <- base::lapply(data$file_info[[i]]$path, \(path) {
                 base::list(
                     href = path,
-                    # TODO: implement format_content_type() function
                     type = openeocraft::format_content_type(format),
                     roles = base::list("data")
                 )
@@ -3467,7 +3466,6 @@ export_cube <- function(data, name, folder) {
         tile_assets <- base::lapply(data$file_info[[i]]$path, \(path) {
             list(
                 href = path,
-                # TODO: implement format_content_type() function
                 type = openeocraft::format_content_type("gtiff"),
                 roles = list("data")
             )
@@ -3558,9 +3556,21 @@ export_ml_model <- function(model, name, folder) {
     # Save RDS object representation
     file <- base::file.path(result_dir, ".obj", base::paste0(name, ".rds"))
     base::saveRDS(model, file)
-    # Create assets list
-    # TODO: point to the model
-    assets <- list()
+    # Create assets list pointing at the saved model
+    host <- openeocraft::get_host(env$api, env$req)
+    model_filename <- base::paste0(name, ".rds")
+    model_href <- openeocraft::make_workspace_files_url(
+        host = host,
+        user = env$user,
+        folder = folder,
+        file = base::file.path(".obj", model_filename)
+    )
+    assets <- base::list()
+    assets[[model_filename]] <- base::list(
+        href = model_href,
+        type = "application/rds",
+        roles = base::list("data")
+    )
     collection <- openeocraft::job_empty_collection(env$api, env$user, env$job)
     collection$assets <- assets
     # Save collection in workspace directory

@@ -9,6 +9,9 @@
 library(openeocraft)
 library(plumber)
 
+# Apply thread / Docker resource caps for this server process.
+openeocraft:::configure_openeocraft_runtime()
+
 # Ensure torch Lantern binary is present before any ML process tries to use it.
 # install_torch() is a no-op when Lantern is already installed; it only runs the
 # download when the binary is missing (first local run, or a broken Docker build).
@@ -245,13 +248,26 @@ function(req, res, job_id) {
 
 #* Lists batch job results
 #* @param job_id job identifier
+#* @param partial return partial results if job is not finished
 #* @serializer unboxedJSON
 #* @get /jobs/<job_id:str>/results
-function(req, res, job_id) {
+function(req, res, job_id, partial = FALSE) {
   print("GET /jobs/<jobid>/results")
   token <- get_token(req)
   user <- get_token_user(api, token)
-  job_get_results(api, user, job_id)
+  if ("partial" %in% names(req$args)) {
+    partial <- req$args$partial
+  }
+  job_get_results(api, user, job_id, partial = partial, req = req)
+}
+
+#* Cancel batch job processing / clear results
+#* @param job_id job identifier
+#* @serializer unboxedJSON
+#* @delete /jobs/<job_id:str>/results
+function(req, res, job_id) {
+  print("DELETE /jobs/<jobid>/results")
+  api_job_cancel_results(api, req, res, job_id)
 }
 
 #* Get an estimate for a batch job
@@ -288,6 +304,54 @@ function(req, res) {
   print("GET /file_formats")
   doc <- api_file_formats(api, req, res)
   doc
+}
+
+#* Authenticated user information
+#* @serializer unboxedJSON
+#* @get /me
+function(req, res) {
+  print("GET /me")
+  api_me(api, req, res)
+}
+
+#* OpenID Connect discovery (providers may be empty)
+#* @serializer unboxedJSON
+#* @get /credentials/oidc
+function(req, res) {
+  print("GET /credentials/oidc")
+  api_credentials_oidc(api, req, res)
+}
+
+#* List user-defined processes
+#* @serializer unboxedJSON
+#* @get /process_graphs
+function(req, res) {
+  print("GET /process_graphs")
+  api_process_graphs_list(api, req, res)
+}
+
+#* Get a user-defined process
+#* @serializer unboxedJSON
+#* @get /process_graphs/<process_graph_id:str>
+function(req, res, process_graph_id) {
+  print("GET /process_graphs/<id>")
+  api_process_graph_get(api, req, res, process_graph_id)
+}
+
+#* Create or replace a user-defined process
+#* @serializer unboxedJSON
+#* @put /process_graphs/<process_graph_id:str>
+function(req, res, process_graph_id) {
+  print("PUT /process_graphs/<id>")
+  api_process_graph_put(api, req, res, process_graph_id)
+}
+
+#* Delete a user-defined process
+#* @serializer unboxedJSON
+#* @delete /process_graphs/<process_graph_id:str>
+function(req, res, process_graph_id) {
+  print("DELETE /process_graphs/<id>")
+  api_process_graph_delete(api, req, res, process_graph_id)
 }
 
 # NOTE:

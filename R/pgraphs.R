@@ -110,8 +110,8 @@ arg_switch <- function(x, ...) {
 #' @return A `call` object.
 #'
 #' @keywords internal
-list_expr <- function(args, env) {
-    args <- pnode_args(args, env = env)
+list_expr <- function(args, env, resolver = NULL) {
+    args <- pnode_args(args, env = env, resolver = resolver)
     as.call(c(as.name("list"), args))
 }
 
@@ -138,17 +138,21 @@ starting_pnode <- function(pg) {
 #' @return List of language objects suitable for \code{as.call()}.
 #'
 #' @keywords internal
-pnode_args <- function(args, env) {
+pnode_args <- function(args, env, resolver = NULL) {
     lapply(args, function(arg) {
         arg_switch(
             arg,
             null = , character = , numeric = , logical = arg,
-            array = , object = list_expr(arg, env = env),
+            array = , object = list_expr(arg, env = env, resolver = resolver),
             result_reference = {
                 node <- get(arg$from_node, envir = env, inherits = FALSE)
-                pnode_expr(node, env = env)
+                pnode_expr(node, env = env, resolver = resolver)
             },
-            user_defined_process = pgraph_expr(arg, parent = env),
+            user_defined_process = pgraph_expr(
+                arg,
+                parent = env,
+                resolver = resolver
+            ),
             parameter_reference = as_name(arg$from_parameter)
         )
     })
@@ -158,13 +162,34 @@ pnode_args <- function(args, env) {
 #'
 #' @param node A process node list.
 #' @param env Environment for resolving `from_node` references.
+#' @param resolver Optional process resolver from [make_process_resolver()].
 #'
-#' @return A `call` object `process_id(...)`.
+#' @return A `call` object `process_id(...)` or an expanded UDP call.
 #'
 #' @keywords internal
-pnode_expr <- function(node, env) {
-    args <- pnode_args(node$arguments, env = env)
-    as_call(node$process_id, args = args)
+pnode_expr <- function(node, env, resolver = NULL) {
+    args <- pnode_args(node$arguments, env = env, resolver = resolver)
+    if (is.null(resolver)) {
+        return(as_call(node$process_id, args = args))
+    }
+    udp <- resolver$resolve(node$process_id, node$namespace)
+    if (is.null(udp)) {
+        return(as_call(node$process_id, args = args))
+    }
+    # Expand stored UDP as an inline function call so predefined processes
+    # inside the UDP resolve via resolver$ns_env at evaluation time.
+    resolver$push(node$process_id)
+    on.exit(resolver$pop(), add = TRUE)
+    fn <- pgraph_fn(
+        list(
+            process_graph = udp$process_graph,
+            parameters = udp$parameters %||% list()
+        ),
+        parent = env,
+        resolver = resolver,
+        eval_env = resolver$ns_env
+    )
+    as.call(c(list(fn), args))
 }
 
 #' Whether a node is flagged as the graph output
@@ -187,8 +212,18 @@ pgraph_result <- function(pg) {
 #'
 #' @keywords internal
 pgraph_params <- function(pg) {
+    params <- pg$parameters
+    if (is.null(params) || !length(params)) {
+        return(NULL)
+    }
     unlist(
-        lapply(pg$parameters, function(x) param(x$name, x$default)),
+        lapply(params, function(x) {
+            if ("default" %in% names(x)) {
+                param(x$name, x$default)
+            } else {
+                param(x$name)
+            }
+        }),
         recursive = FALSE,
         use.names = TRUE
     )
@@ -198,6 +233,7 @@ pgraph_params <- function(pg) {
 #'
 #' @param pg A list passing \code{is_pgraph()}.
 #' @param parent Optional parent environment for nested graphs.
+#' @param resolver Optional process resolver from [make_process_resolver()].
 #'
 #' @return Language object (typically a nested `call`).
 #'
@@ -206,27 +242,31 @@ pgraph_params <- function(pg) {
 #' `process_graph` keys and starts from \code{starting_pnode()}.
 #'
 #' @keywords internal
-pgraph_expr <- function(pg, parent = NULL) {
+pgraph_expr <- function(pg, parent = NULL, resolver = NULL) {
     stopifnot(is_pgraph(pg))
     if (is.null(parent)) {
         parent <- emptyenv()
     }
     pnode <- starting_pnode(pg)
     env <- list2env(pg$process_graph, parent = parent)
-    pnode_expr(pnode, env = env)
+    pnode_expr(pnode, env = env, resolver = resolver)
 }
 
 #' Wrap \code{pgraph_expr()} as an executable function
 #'
 #' @param pg Process graph list.
 #' @param parent Passed to \code{pgraph_expr()}.
+#' @param resolver Optional process resolver from [make_process_resolver()].
 #'
 #' @return A `function` with formals from \code{pgraph_params()} and body from
 #'   \code{pgraph_expr()}.
 #'
 #' @keywords internal
-pgraph_fn <- function(pg, parent = NULL) {
+pgraph_fn <- function(pg, parent = NULL, resolver = NULL, eval_env = NULL) {
     par <- pgraph_params(pg)
-    expr <- pgraph_expr(pg, parent = parent)
-    make_fn(par, body = expr, env = parent.frame())
+    expr <- pgraph_expr(pg, parent = parent, resolver = resolver)
+    if (is.null(eval_env)) {
+        eval_env <- parent.frame()
+    }
+    make_fn(par, body = expr, env = eval_env)
 }

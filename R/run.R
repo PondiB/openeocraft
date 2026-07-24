@@ -28,11 +28,23 @@
 #'
 #' @name process_runtime
 #' @seealso [process_decorators()], [`openeo-process`], [run_pgraph()]
+#'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo", title = "Demo", description = "Demo",
+#'     backend_version = "0.3.1", stac_api = NULL,
+#'     work_dir = tempdir(), production = FALSE
+#' )
+#' mock <- system.file("mock/mock-processes.R", package = "openeocraft")
+#' load_processes(api, mock)
+#' }
 #' @export
 load_processes <- function(api, processes_file) {
     stopifnot(file.exists(processes_file))
     setup_namespace(api)
-    # TODO: split environments
+    # Single shared process namespace; per-env isolation is deferred
+    # (see DEVELOPMENT.md).
     eval(parse(processes_file, encoding = "UTF-8"), envir = get_namespace(api))
     api_attr(api, "processes") <- list()
     process_decorators(api, processes_file, decorator = "openeo-process")
@@ -161,9 +173,9 @@ run_pgraph <- function(api, req, user, job, pg) {
     if ("process" %in% names(pg)) {
         pg <- pg$process
     }
-    expr <- pgraph_expr(pg)
-    # TODO: need to define a scope with api and user objects
-    # a possible solution is load the processes per request
+    resolver <- make_process_resolver(api, user)
+    expr <- pgraph_expr(pg, resolver = resolver)
+    # create_env() injects api, user, job, and req into the eval frame.
     env <- create_env(api, user, job, req)
     eval(expr, envir = env, enclos = get_namespace(api))
 }
