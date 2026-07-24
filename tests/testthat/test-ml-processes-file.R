@@ -4,6 +4,7 @@
 # JSON-serialize some non-exportable parameter defaults for new process specs.
 
 test_that("inst/ml/processes.R parses as valid R", {
+    skip_on_cran()
     f <- system.file("ml/processes.R", package = "openeocraft")
     skip_if(f == "", "inst/ml/processes.R not found")
     exprs <- parse(f, encoding = "UTF-8")
@@ -11,6 +12,7 @@ test_that("inst/ml/processes.R parses as valid R", {
 })
 
 test_that("ML processes file eval()s in API sandbox when sits is installed", {
+    skip_on_cran()
     skip_if_not_installed("sits")
     f <- system.file("ml/processes.R", package = "openeocraft")
     skip_if(f == "", "inst/ml/processes.R not found")
@@ -111,6 +113,7 @@ test_that("ML processes file eval()s in API sandbox when sits is installed", {
 })
 
 test_that("load_uploaded_files process loads RDS from workspace paths", {
+    skip_on_cran()
     candidates <- c(
         "inst/ml/processes.R",
         "../inst/ml/processes.R",

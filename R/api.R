@@ -90,6 +90,8 @@
 #'
 #' @param job_id The identifier for the job
 #'
+#' @param process_graph_id Identifier of a stored user-defined process.
+#'
 #' @param ... Additional arguments to be passed to the method-specific
 #'   functions.
 #'
@@ -108,6 +110,18 @@
 #'
 #' @name api_handling
 #'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo",
+#'     title = "Demo",
+#'     description = "Demo API",
+#'     backend_version = "0.3.1",
+#'     stac_api = NULL,
+#'     work_dir = tempdir(),
+#'     production = FALSE
+#' )
+#' }
 NULL
 #' @rdname api_handling
 #' @export

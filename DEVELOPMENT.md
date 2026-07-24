@@ -179,6 +179,7 @@ TODO over leaving speculative notes in hot paths.
 | Process graph `from_parameter` | Nested UDP / callback parameter references |
 | `/process_graphs` CRUD | Per-user UDP store (`process_graphs.rds`) |
 | Process `namespace` + UDP-by-`process_id` | `user` namespace; predefined when `namespace` is null |
+| CRAN packaging prep | No Remotes; soft STAC via Docker; `--as-cran` clean |
 
 ### Deferred (larger / product-dependent)
 
@@ -191,6 +192,7 @@ TODO over leaving speculative notes in hot paths.
 | OIDC login, UDF runtimes, service types | Each is an openEO endpoint epic |
 | URL-based process namespaces | Remote UDP fetch; L2 satisfied by `user` namespace |
 | `POST /validation` | Optional companion to UDP CRUD |
+| openstac on CRAN | Tracked with Open-Earth-Monitor/openstac; Docker installs from GitHub |
 | Collection queryables (openSTAC) | Depends on STAC backend |
 | sqlite / mongo job store | Only if file rename + locking prove insufficient |
 | Process path markers + `usage_*` metrics | Spec-nice; large instrumentation |

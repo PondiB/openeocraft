@@ -15,3 +15,7 @@ A hexadecimal string.
 \description{
 Create a random identifier
 }
+\examples{
+id <- random_id(8)
+nchar(id)
+}

@@ -41,3 +41,6 @@ authentication. They allow you to register credential files with an API
 instance, add or update user/password pairs, and resolve bearer tokens
 from incoming requests.
 }
+\examples{
+get_token(list(HTTP_AUTHORIZATION = "Bearer abc123"))
+}

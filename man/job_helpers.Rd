@@ -48,6 +48,8 @@ job_empty_collection(api, user, job)
 \code{"info"}, or \code{"debug"}.}
 
 \item{limit}{Maximum number of log records to return.}
+
+\item{partial}{If \code{TRUE}, return a placeholder collection for unfinished jobs.}
 }
 \value{
 \itemize{
@@ -67,4 +69,14 @@ job in its current state.
 \description{
 Helpers to manage stored jobs, update their status, query logs and results,
 and compute derived URLs and documents.
+}
+\examples{
+\donttest{
+api <- create_openeo_v1(
+    id = "demo", title = "Demo", description = "Demo",
+    backend_version = "0.3.1", stac_api = NULL,
+    work_dir = tempdir(), production = FALSE
+)
+job_empty_collection(api, "alice", list(id = "j1", status = "created"))
+}
 }

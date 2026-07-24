@@ -49,6 +49,8 @@
 #'   works if the `api_error_handler` function is handling errors in
 #'   `plumber`.
 #'
+#' @param id Optional openEO error identifier included in the JSON body.
+#'
 #' @param ... Additional arguments to be passed to error handling functions.
 #'
 #' @seealso
@@ -60,6 +62,13 @@
 #' `https://github.com/rstudio/plumber/issues/66#issuecomment-418660334`
 #'
 #' @name api_helpers
+#'
+#' @examples
+#' \dontrun{
+#' # Typically registered on a plumber router:
+#' # pr <- plumber::pr()
+#' # pr <- plumber::pr_set_error(pr, api_error_handler)
+#' }
 NULL
 #' @rdname api_helpers
 #' @export
@@ -106,8 +115,7 @@ api_stop <- function(status, ..., id = NULL) {
 api_success <- function(status, ...) {
     list(code = status, message = paste0(...))
 }
-#' @rdname api_helpers
-#' @export
+#' @keywords internal
 .openeocraft_default_api_base_url <- function() {
     env_host <- Sys.getenv("OPENEOCRAFT_API_BASE_URL", unset = "")
     if (nzchar(env_host)) {
@@ -119,6 +127,8 @@ api_success <- function(status, ...) {
     NULL
 }
 
+#' @rdname api_helpers
+#' @export
 get_host <- function(api, req) {
     host <- api_attr(api, "api_base_url")
     if (!is.null(host) && nzchar(host)) {
@@ -263,6 +273,9 @@ setup_plumber_docs <- function(api, pr, docs_endpoint, spec_endpoint) {
 #'   `get_token_user()` returns the user associated with a token.
 #'
 #' @name credential_helpers
+#'
+#' @examples
+#' get_token(list(HTTP_AUTHORIZATION = "Bearer abc123"))
 NULL
 
 #' @rdname credential_helpers
@@ -378,6 +391,16 @@ api_workdir <- function(api) {
 #' @return Normalised path to the workspace directory.
 #'
 #' @export
+#'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo", title = "Demo", description = "Demo",
+#'     backend_version = "0.3.1", stac_api = NULL,
+#'     work_dir = tempdir(), production = FALSE
+#' )
+#' api_user_workspace(api, "alice")
+#' }
 api_user_workspace <- function(api, user) {
     if (!dir.exists(api_workdir(api))) {
         dir.create(api_workdir(api), recursive = TRUE)
@@ -424,6 +447,10 @@ create_env <- function(api, user, job, req) {
 #'   \item{output}{A list of supported output formats.}
 #' }
 #' @export
+#'
+#' @examples
+#' formats <- file_formats()
+#' names(formats$output)
 file_formats <- function() {
     # Dynamic register_file_format() API deferred; see DEVELOPMENT.md.
     # Define the output formats
@@ -541,6 +568,9 @@ file_formats_auth <- function(doc, api, token) {
 #' @return A character string containing the absolute URL.
 #'
 #' @export
+#'
+#' @examples
+#' make_job_files_url("https://example.com", "alice", "job1", "out.tif")
 make_job_files_url <- function(host, user, job_id, file) {
     token <- base64enc::base64encode(charToRaw(user))
     file <- file.path("/files/jobs", job_id, file)
@@ -554,6 +584,9 @@ make_job_files_url <- function(host, user, job_id, file) {
 #' @return A character string containing the absolute URL.
 #'
 #' @export
+#'
+#' @examples
+#' make_workspace_files_url("https://example.com", "alice", "data", "x.tif")
 make_workspace_files_url <- function(host, user, folder, file) {
     token <- base64enc::base64encode(charToRaw(user))
     file <- file.path("/files/root", folder, file)

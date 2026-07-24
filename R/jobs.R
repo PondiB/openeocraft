@@ -115,6 +115,8 @@ job_delete_rds <- function(api, user, job, jobs) {
 #'
 #' @param limit Maximum number of log records to return.
 #'
+#' @param partial If `TRUE`, return a placeholder collection for unfinished jobs.
+#'
 #' @return
 #'   * `job_get_dir()` returns the path backing the job workspace.
 #'   * `job_sync()` returns `NULL` invisibly after updating job status.
@@ -129,6 +131,16 @@ job_delete_rds <- function(api, user, job, jobs) {
 #'     job in its current state.
 #'
 #' @name job_helpers
+#'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo", title = "Demo", description = "Demo",
+#'     backend_version = "0.3.1", stac_api = NULL,
+#'     work_dir = tempdir(), production = FALSE
+#' )
+#' job_empty_collection(api, "alice", list(id = "j1", status = "created"))
+#' }
 NULL
 #' @rdname job_helpers
 #' @export
@@ -249,8 +261,12 @@ job_async <- function(api, req, user, job_id) {
     cmdargs <- c("--slave", "--no-save", "--no-restore")
     proc <- suppressMessages(callr::r_bg(
         func = function(user, job_id) {
-            api <- openeocraft:::.openeocraft_worker_api()
-            openeocraft::job_sync(api, req = list(), user = user, job_id = job_id)
+            api <- utils::getFromNamespace(
+                "openeocraft_worker_api", "openeocraft"
+            )()
+            openeocraft::job_sync(
+                api, req = list(), user = user, job_id = job_id
+            )
         },
         args = list(user, job_id),
         cmdargs = cmdargs,

@@ -10,7 +10,7 @@ configure_openeocraft_runtime()
 Invisibly NULL.
 }
 \description{
-Called from package load and at job start so callr background workers inherit
-the same limits as the Plumber parent (server.R options do not propagate).
+Called from server/worker entrypoints (not from \code{.onLoad}) so callr
+background workers inherit the same limits as the Plumber parent.
 }
 \keyword{internal}

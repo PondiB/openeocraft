@@ -9,6 +9,9 @@
 library(openeocraft)
 library(plumber)
 
+# Apply thread / Docker resource caps for this server process.
+openeocraft:::configure_openeocraft_runtime()
+
 # Ensure torch Lantern binary is present before any ML process tries to use it.
 # install_torch() is a no-op when Lantern is already installed; it only runs the
 # download when the binary is missing (first local run, or a broken Docker build).

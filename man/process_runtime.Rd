@@ -43,6 +43,17 @@ holds \code{api}, \code{user}, \code{job}, etc.
 
 \code{get_job_dir()} resolves the on-disk workspace directory for the active job.
 }
+\examples{
+\donttest{
+api <- create_openeo_v1(
+    id = "demo", title = "Demo", description = "Demo",
+    backend_version = "0.3.1", stac_api = NULL,
+    work_dir = tempdir(), production = FALSE
+)
+mock <- system.file("mock/mock-processes.R", package = "openeocraft")
+load_processes(api, mock)
+}
+}
 \seealso{
 \code{\link[=process_decorators]{process_decorators()}}, \code{\link{openeo-process}}, \code{\link[=run_pgraph]{run_pgraph()}}
 }

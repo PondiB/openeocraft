@@ -170,6 +170,8 @@ the request.}
 \item{check_auth}{Check for authenticated user (\code{TRUE}) or not (\code{FALSE}).}
 
 \item{job_id}{The identifier for the job}
+
+\item{process_graph_id}{Identifier of a stored user-defined process.}
 }
 \value{
 For API creation functions, returns a api object. For API
@@ -202,6 +204,19 @@ of errors in the API.
 \item \code{api_conformance}: Creates document as a response to
 \verb{/conformance} endpoint.
 
+}
+}
+\examples{
+\donttest{
+api <- create_openeo_v1(
+    id = "demo",
+    title = "Demo",
+    description = "Demo API",
+    backend_version = "0.3.1",
+    stac_api = NULL,
+    work_dir = tempdir(),
+    production = FALSE
+)
 }
 }
 \references{

@@ -56,6 +56,8 @@ api_landing_page.openeo_v1 <- function(api, req, res) {
         backend_version = api$backend_version,
         stac_version = if (is.null(api$stac_api)) {
             "1.0.0"
+        } else if (is.character(api$stac_api)) {
+            api$stac_api[[1]]
         } else {
             api$stac_api$get("stac_version")
         },

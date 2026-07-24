@@ -54,6 +54,11 @@ data_serializer.openeo_tar <- function(x, res) {
 #'   content type.
 #'
 #' @name format_helpers
+#'
+#' @examples
+#' format_ext("gtiff")
+#' ext_format("result.tif")
+#' format_content_type("netcdf")
 NULL
 
 #' @rdname format_helpers
