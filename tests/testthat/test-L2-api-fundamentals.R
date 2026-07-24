@@ -58,12 +58,18 @@ test_that("process_graphs CRUD: put, get, list, delete", {
     expect_error(process_graph_get(api, user, "add_one"), class = "condition")
 })
 
-test_that("process_graph_check rejects invalid graphs", {
-    expect_error(process_graph_check(NULL, "x"), class = "condition")
+test_that("process_graph_check rejects invalid ids, graphs, and nameless parameters", {
+    body <- add_one_udp_body()
+
+    expect_error(process_graph_check(body, ""), class = "condition")
+    expect_error(process_graph_check(body, "1bad"), class = "condition")
+    expect_error(process_graph_check(body, "has-dash"), class = "condition")
+    expect_error(process_graph_check(NULL, "ok_id"), class = "condition")
     expect_error(
-        process_graph_check(list(summary = "s"), "x"),
+        process_graph_check(list(summary = "s"), "ok_id"),
         class = "condition"
     )
+
     # Two result nodes
     bad <- list(
         process_graph = list(
@@ -71,8 +77,13 @@ test_that("process_graph_check rejects invalid graphs", {
             b = list(process_id = "add", arguments = list(x = 1, y = 2), result = TRUE)
         )
     )
-    expect_error(process_graph_check(bad, "x"), class = "condition")
+    expect_error(process_graph_check(bad, "ok_id"), class = "condition")
+
+    bad_param <- body
+    bad_param$parameters <- list(list(schema = list(type = "number")))
+    expect_error(process_graph_check(bad_param, "ok_id"), class = "condition")
 })
+
 
 test_that("api_process_graphs_* endpoints require auth and round-trip", {
     api <- new_test_api()

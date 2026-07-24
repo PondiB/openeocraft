@@ -34,6 +34,18 @@ process_graphs_write <- function(api, user, graphs) {
 #' @return Normalised UDP list.
 #' @keywords internal
 process_graph_check <- function(body, process_graph_id) {
+    if (!is.character(process_graph_id) || length(process_graph_id) != 1L ||
+        !nzchar(process_graph_id)) {
+        api_stop(400L, "Invalid process_graph_id")
+    }
+    # openEO process ids are identifiers; keep the path segment conservative.
+    if (!grepl("^[A-Za-z][A-Za-z0-9_]*$", process_graph_id)) {
+        api_stop(
+            400L,
+            "Invalid process_graph_id: use a letter followed by ",
+            "letters, digits, or underscores"
+        )
+    }
     if (is.null(body) || !is.list(body)) {
         api_stop(400L, "Missing process graph information")
     }
@@ -51,11 +63,24 @@ process_graph_check <- function(body, process_graph_id) {
     if (!is.null(body$id) && !identical(as.character(body$id), process_graph_id)) {
         api_stop(400L, "Body 'id' must match the process_graph_id path parameter")
     }
+    parameters <- if (is.null(body$parameters)) list() else body$parameters
+    if (!is.list(parameters)) {
+        api_stop(400L, "Invalid process graph: 'parameters' must be an array")
+    }
+    for (i in seq_along(parameters)) {
+        p <- parameters[[i]]
+        if (!is.list(p) || is.null(p$name) || !nzchar(as.character(p$name)[[1]])) {
+            api_stop(
+                400L,
+                "Invalid process graph: each parameter needs a non-empty 'name'"
+            )
+        }
+    }
     list(
         id = process_graph_id,
         summary = body$summary,
         description = body$description,
-        parameters = if (is.null(body$parameters)) list() else body$parameters,
+        parameters = parameters,
         returns = body$returns,
         categories = body$categories,
         process_graph = body$process_graph,
