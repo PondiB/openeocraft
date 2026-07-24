@@ -220,6 +220,9 @@ log_append <- function(api, user, job_id, code, level, message, ...) {
 #' @rdname job_helpers
 #' @export
 job_sync <- function(api, req, user, job_id) {
+    # Ensure thread caps even when the package was loaded without Docker/plumber
+    # calling configure_openeocraft_runtime() (`.onLoad` stays quiet for CRAN).
+    configure_openeocraft_runtime()
     job <- job_upd_status(api, user, job_id, "running")
     tryCatch(
         {

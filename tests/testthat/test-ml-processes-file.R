@@ -61,6 +61,29 @@ test_that("ML processes file eval()s in API sandbox when sits is installed", {
     expect_true(fmt("GTiff"))
     expect_true(fmt("GeoTIFF"))
     expect_false(fmt("netCDF"))
+})
+
+test_that("ML validation helpers work with sits samples when caret is installed", {
+    skip_on_cran()
+    skip_if_not_installed("sits")
+    # sits_kfold_validate / sits_rfor need Suggests of sits, not of openeocraft.
+    skip_if_not_installed("caret")
+    skip_if_not_installed("randomForest")
+    f <- system.file("ml/processes.R", package = "openeocraft")
+    skip_if(f == "", "inst/ml/processes.R not found")
+    api <- create_openeo_v1(
+        id = "ml-test-metrics",
+        title = "t",
+        description = "t",
+        backend_version = "0",
+        stac_api = NULL,
+        work_dir = tempdir(),
+        conforms_to = NULL,
+        production = FALSE
+    )
+    openeocraft:::setup_namespace(api)
+    ns <- openeocraft:::get_namespace(api)
+    expect_error(eval(parse(f, encoding = "UTF-8"), envir = ns), NA)
 
     metrics_fn <- get(
         ".openeocraft_validation_metrics_payload",
@@ -94,7 +117,6 @@ test_that("ML processes file eval()s in API sandbox when sits is installed", {
         envir = ns,
         inherits = FALSE
     )
-    data(samples_l8_rondonia_2bands, package = "sits", envir = environment())
     n <- nrow(samples_l8_rondonia_2bands)
     train <- samples_l8_rondonia_2bands[seq_len(floor(n * 0.8)), ]
     val <- samples_l8_rondonia_2bands[seq(floor(n * 0.8) + 1, n), ]
@@ -114,13 +136,16 @@ test_that("ML processes file eval()s in API sandbox when sits is installed", {
 
 test_that("load_uploaded_files process loads RDS from workspace paths", {
     skip_on_cran()
-    candidates <- c(
-        "inst/ml/processes.R",
-        "../inst/ml/processes.R",
-        "../../inst/ml/processes.R"
-    )
-    f <- candidates[file.exists(candidates)][1]
-    skip_if(is.na(f), "inst/ml/processes.R not found")
+    f <- system.file("ml/processes.R", package = "openeocraft")
+    if (!nzchar(f)) {
+        candidates <- c(
+            "inst/ml/processes.R",
+            "../inst/ml/processes.R",
+            "../../inst/ml/processes.R"
+        )
+        f <- candidates[file.exists(candidates)][1]
+    }
+    skip_if(is.na(f) || !nzchar(f), "inst/ml/processes.R not found")
 
     api <- create_openeo_v1(
         id = "ml-test-load-uploaded",
