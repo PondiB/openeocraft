@@ -548,6 +548,25 @@ job.get_results().download_files("output")
 
 **Other workflows:** Random forest + Breizh-style alignment (constants shared with R) live in `inst/examples/breizh_openeo_training_predict_aligned.py`. Step-by-step notebooks: `inst/demo-lps-2025/`.
 
+## Citation
+
+If you use OpenEOcraft in research, please cite:
+
+> Pondi, B., & Simoes, R. (2026). OpenEOcraft: A generic R-based framework for earth observation data cubes analysis. *Environmental Modelling & Software*, *204*, 107087. https://doi.org/10.1016/j.envsoft.2026.107087
+
+```bibtex
+@article{PondiSimoes2026OpenEOcraft,
+  title   = {OpenEOcraft: A generic R-based framework for earth observation data cubes analysis},
+  author  = {Pondi, Brian and Simoes, Rolf},
+  journal = {Environmental Modelling \& Software},
+  volume  = {204},
+  pages   = {107087},
+  year    = {2026},
+  doi     = {10.1016/j.envsoft.2026.107087},
+  url     = {https://doi.org/10.1016/j.envsoft.2026.107087}
+}
+```
+
 ## Development
 
 Local vs Docker workflows, process registration, and the **TODO / capabilities roadmap** (what was hardened vs deliberately deferred) live in [`DEVELOPMENT.md`](DEVELOPMENT.md).
