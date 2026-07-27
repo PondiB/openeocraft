@@ -23,8 +23,11 @@ test_that("GET /file_formats: Each format has a description", {
     result <- api_file_formats(api, req, res)
 
     has_valid_description <- function(description) {
-        # TODO: improve this -- what is a valid description according to spec?
-        nchar(description) > 10L
+        # openEO: description is a non-empty string; we require > 10 chars
+        # so stubs like "GeoTiff" alone are rejected as incomplete docs.
+        is.character(description) &&
+            length(description) == 1L &&
+            nchar(description) > 10L
     }
 
     for (format_name in names(result$input)) {

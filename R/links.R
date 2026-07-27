@@ -26,6 +26,11 @@
 #' @return The updated document with the new link added.
 #'
 #' @name link_functions
+#'
+#' @examples
+#' doc <- list()
+#' doc <- add_link(doc, "self", "https://example.com/", type = "application/json")
+#' doc <- update_link(doc, "self", "https://example.com/v1/")
 NULL
 #' @rdname link_functions
 #' @export
@@ -71,6 +76,9 @@ new_link <- function(rel, href, ...) {
 #' @return A character string containing the composed URL.
 #'
 #' @export
+#'
+#' @examples
+#' make_url("https://example.com", "/jobs", "abc", limit = 10)
 make_url <- function(host, ...) {
     dots <- c(...)
     segments <- unname(dots)

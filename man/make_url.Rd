@@ -18,3 +18,6 @@ A character string containing the composed URL.
 \description{
 Build absolute URLs from host and path fragments
 }
+\examples{
+make_url("https://example.com", "/jobs", "abc", limit = 10)
+}

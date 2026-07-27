@@ -11,8 +11,6 @@ Authors@R: c(
     person(given = "OpenGeoHub Foundation",
            email = "support@opengeohub.org",
            role = "cph"))
-Author: Rolf Simoes [aut, cre], Brian Pondi [aut], OpenGeoHub Foundation [cph]
-Maintainer: Rolf Simoes <rolf.simoes@opengeohub.org>
 Description: Provides an R framework for crafting and serving openEO API
     applications by building on the plumber package. The friendly and
     extensible interface helps create RESTful openEO web services that
@@ -22,8 +20,9 @@ URL: https://github.com/Open-Earth-Monitor/openeocraft
 BugReports: https://github.com/Open-Earth-Monitor/openeocraft/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.0.0
 Depends:
-    R (>= 4.5.0)
+    R (>= 4.4.0)
 Imports:
     plumber,
     jsonlite,
@@ -31,17 +30,16 @@ Imports:
     callr,
     swagger
 Suggests:
-    openstac,
     sits,
     terra,
     knitr,
     rmarkdown,
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
-Remotes:
-    Open-Earth-Monitor/openstac@dev
 Collate:
+    'openeocraft-package.R'
     'utils.R'
     'utils-api.R'
     'data.R'
@@ -54,9 +52,11 @@ Collate:
     'api-openeo_v1.R'
     'collections.R'
     'jobs.R'
+    'process_graphs.R'
     'pgraphs.R'
     'mock.R'
     'runtime-config.R'
     'run.R'
     'zzz.R'
-Config/roxygen2/version: 8.0.0
+Config/Needs/website: pkgdown
+Config/Needs/check: covr

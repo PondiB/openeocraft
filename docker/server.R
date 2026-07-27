@@ -11,7 +11,7 @@ Sys.setenv(
   TORCH_NUM_THREADS = Sys.getenv("TORCH_NUM_THREADS", "1")
 )
 
-# Plumber parent only; callr job workers pick up OPENEOCRAFT_* via processes.R + .onLoad.
+# Plumber parent only; callr workers and job_sync call configure_openeocraft_runtime().
 if (file.exists("/.dockerenv")) {
   options(
     openeocraft.resource_fraction = as.numeric(

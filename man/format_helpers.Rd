@@ -28,3 +28,8 @@ content type.
 \description{
 Translate between file extensions, format identifiers, and MIME types
 }
+\examples{
+format_ext("gtiff")
+ext_format("result.tif")
+format_content_type("netcdf")
+}

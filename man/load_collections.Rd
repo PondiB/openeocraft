@@ -23,3 +23,13 @@ This convenience helper stores pointers to collection configuration for a
 backend. The function is currently a stub and will be extended once STAC
 integration is implemented.
 }
+\examples{
+\donttest{
+api <- create_openeo_v1(
+    id = "demo", title = "Demo", description = "Demo",
+    backend_version = "0.3.1", stac_api = NULL,
+    work_dir = tempdir(), production = FALSE
+)
+load_collections(api, collections = list())
+}
+}

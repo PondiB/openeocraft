@@ -18,3 +18,7 @@ This function returns a list of supported input and output file formats
 for GIS data. Each format includes details such as title, description,
 GIS data types, and parameters.
 }
+\examples{
+formats <- file_formats()
+names(formats$output)
+}

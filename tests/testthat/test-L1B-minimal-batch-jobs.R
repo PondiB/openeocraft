@@ -114,9 +114,24 @@ test_that(paste0(
     res <- mock_res()
 
     result <- api_jobs_list(api, req, res)
-    expect_gte(length(result$jobs), 1)
+    all_n <- length(result$jobs)
+    expect_gte(all_n, 1)
 
-    # TODO: implement limit test
+    limited <- api_jobs_list(
+        api,
+        mock_req(
+            "/jobs",
+            method = "GET",
+            HTTP_AUTHORIZATION = token,
+            args = list(limit = "1")
+        ),
+        mock_res()
+    )
+    expect_equal(length(limited$jobs), 1L)
+    rels <- vapply(limited$links, `[[`, character(1), "rel")
+    if (all_n > 1L) {
+        expect_true("next" %in% rels)
+    }
 })
 
 test_that(paste0(

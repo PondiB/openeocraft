@@ -11,6 +11,8 @@ plumb_reg_serializers()
 }
 \description{
 Registers \code{"serialize_result"}, which dispatches on \code{val$data} via
-\code{get_serializer()}.
+\code{get_serializer()}. Synchronous \code{POST /result} uses \code{data_serializer()}
+instead; keep both paths aligned when adding formats (see
+\code{DEVELOPMENT.md}).
 }
 \keyword{internal}

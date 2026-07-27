@@ -4,12 +4,14 @@
 \alias{pgraph_fn}
 \title{Wrap \code{pgraph_expr()} as an executable function}
 \usage{
-pgraph_fn(pg, parent = NULL)
+pgraph_fn(pg, parent = NULL, resolver = NULL, eval_env = NULL)
 }
 \arguments{
 \item{pg}{Process graph list.}
 
 \item{parent}{Passed to \code{pgraph_expr()}.}
+
+\item{resolver}{Optional process resolver from \code{\link[=make_process_resolver]{make_process_resolver()}}.}
 }
 \value{
 A \code{function} with formals from \code{pgraph_params()} and body from

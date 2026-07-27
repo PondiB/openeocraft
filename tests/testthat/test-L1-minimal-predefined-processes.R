@@ -11,7 +11,11 @@ test_that(paste0(
     result <- api_processes(api, req, res)
 
     expect_true("processes" %in% names(result))
+    expect_true("links" %in% names(result))
     expect_type(result$processes, "list")
+    expect_type(result$links, "list")
+    rels <- vapply(result$links, `[[`, character(1), "rel")
+    expect_true("self" %in% rels)
 })
 
 test_that("GET /processes: Works without authentication", {
@@ -40,10 +44,24 @@ test_that(paste0(
     res <- mock_res()
 
     result <- api_processes(api, req, res)
+    all_n <- length(result$processes)
+    expect_gte(all_n, 1)
 
-    expect_gte(length(result$processes), 1)
-
-    # TODO: implement limit parameter
+    limited <- api_processes(
+        api,
+        mock_req(
+            "/processes",
+            method = "GET",
+            HTTP_AUTHORIZATION = token,
+            args = list(limit = "1")
+        ),
+        mock_res()
+    )
+    expect_equal(length(limited$processes), 1L)
+    rels <- vapply(limited$links, `[[`, character(1), "rel")
+    if (all_n > 1L) {
+        expect_true("next" %in% rels)
+    }
 })
 
 test_that(paste0(

@@ -2,4 +2,5 @@
 #' @importFrom base64enc base64decode
 #' @importFrom callr r_bg
 #' @importFrom swagger swagger_spec swagger_path
+#' @importFrom utils tail modifyList
 NULL
