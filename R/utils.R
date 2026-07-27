@@ -49,6 +49,10 @@ placeholders <- function(x, schema = "openeo") {
 #' @return A hexadecimal string.
 #'
 #' @export
+#'
+#' @examples
+#' id <- random_id(8)
+#' nchar(id)
 random_id <- function(n) {
     paste(as.raw(sample(256L, n, TRUE) - 1L), collapse = "")
 }
@@ -64,11 +68,6 @@ transact <- function(expr, commit = NULL, rollback = NULL) {
         },
         finally = commit
     )
-}
-
-#' @export
-get_method <- function(req) {
-    req$REQUEST_METHOD
 }
 
 get_link <- function(host, ...) {

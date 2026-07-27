@@ -45,3 +45,9 @@ replaced.
 
 }
 }
+\examples{
+doc <- list()
+doc <- add_wellknown_version(doc, "1.2.0", "https://example.com/", FALSE)
+doc <- update_wellknown_version(doc, "1.2.0", "https://example.com/v1/", TRUE)
+
+}

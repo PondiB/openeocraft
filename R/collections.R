@@ -15,6 +15,16 @@
 #' @return The `api` object, invisibly.
 #'
 #' @export
+#'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo", title = "Demo", description = "Demo",
+#'     backend_version = "0.3.1", stac_api = NULL,
+#'     work_dir = tempdir(), production = FALSE
+#' )
+#' load_collections(api, collections = list())
+#' }
 load_collections <- function(api, collections = NULL, stac_api = NULL,
                              catalog_file = NULL) {
     api_attr(api, "collections") <- list(

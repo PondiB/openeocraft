@@ -7,7 +7,9 @@ NULL
 #'
 #' @description
 #' Registers `"serialize_result"`, which dispatches on `val$data` via
-#' `get_serializer()`.
+#' `get_serializer()`. Synchronous `POST /result` uses `data_serializer()`
+#' instead; keep both paths aligned when adding formats (see
+#' `DEVELOPMENT.md`).
 #'
 #' @return `NULL`, invisibly.
 #'
@@ -25,11 +27,10 @@ plumb_reg_serializers <- function() {
 #' Choose a plumber serializer for an openEO result object
 #'
 #' @param data S3 object carrying openEO format metadata (class determines JSON,
-#'   RDS, etc.).
+#'   RDS, GeoTIFF, etc.).
 #'
-#' @return A serializer **generator** function compatible with plumber
-#'   (`function() { function(val, req, res, error_handler) { ... } }` style
-#'   for `serialize_result`).
+#' @return A plumber serializer function
+#'   (`function(val, req, res, errorHandler)`).
 #'
 #' @keywords internal
 get_serializer <- function(data) {
@@ -43,11 +44,41 @@ get_serializer.openeo_json <- function(data) {
     plumber::serializer_json()
 }
 
-#' @describeIn get_serializer GeoTIFF serializer (not yet implemented)
+#' Read a result file path as raw bytes for binary serializers
+#'
+#' @param path Character path to a file on disk.
+#' @return Raw vector of file contents.
+#' @keywords internal
+.serializer_read_file <- function(path) {
+    path <- path[[1L]]
+    if (!is.character(path) || !nzchar(path) || !file.exists(path)) {
+        stop("Result file not found for serialization", call. = FALSE)
+    }
+    readBin(path, what = "raw", n = file.info(path)$size)
+}
+
+#' @describeIn get_serializer GeoTIFF bytes with \code{image/tiff} content type
 #' @param data Result object with class `openeo_gtiff`.
 #' @export
 get_serializer.openeo_gtiff <- function(data) {
-    # TODO: implement GTiff serializer
+    plumber::serializer_content_type("image/tiff", .serializer_read_file)
+}
+
+#' @describeIn get_serializer NetCDF file body (\code{application/netcdf})
+#' @param data Result object with class `openeo_netcdf`.
+#' @export
+get_serializer.openeo_netcdf <- function(data) {
+    plumber::serializer_content_type(
+        "application/netcdf",
+        .serializer_read_file
+    )
+}
+
+#' @describeIn get_serializer Tar archive with \code{application/x-tar}
+#' @param data Result object with class `openeo_tar`.
+#' @export
+get_serializer.openeo_tar <- function(data) {
+    plumber::serializer_content_type("application/x-tar", .serializer_read_file)
 }
 
 #' @describeIn get_serializer Native R RDS via \code{plumber::serializer_rds()}

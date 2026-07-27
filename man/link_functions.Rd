@@ -42,3 +42,8 @@ the same relationship exist, all of them are replaced.
 
 }
 }
+\examples{
+doc <- list()
+doc <- add_link(doc, "self", "https://example.com/", type = "application/json")
+doc <- update_link(doc, "self", "https://example.com/v1/")
+}

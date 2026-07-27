@@ -49,6 +49,8 @@
 #'   works if the `api_error_handler` function is handling errors in
 #'   `plumber`.
 #'
+#' @param id Optional openEO error identifier included in the JSON body.
+#'
 #' @param ... Additional arguments to be passed to error handling functions.
 #'
 #' @seealso
@@ -60,6 +62,13 @@
 #' `https://github.com/rstudio/plumber/issues/66#issuecomment-418660334`
 #'
 #' @name api_helpers
+#'
+#' @examples
+#' \dontrun{
+#' # Typically registered on a plumber router:
+#' # pr <- plumber::pr()
+#' # pr <- plumber::pr_set_error(pr, api_error_handler)
+#' }
 NULL
 #' @rdname api_helpers
 #' @export
@@ -83,20 +92,30 @@ api_error_handler <- function(req, res, err) {
     if (is.null(err$status)) err$status <- 500
     if (is.null(err$message)) err$message <- "Internal server error"
     res$status <- err$status
-    list(code = err$status, message = paste("Error:", err$message))
+    if (identical(as.integer(err$status), 401L)) {
+        res$setHeader("WWW-Authenticate", "Basic, Bearer")
+    }
+    out <- list(
+        id = if (!is.null(err$id)) err$id else paste0("HTTP", err$status),
+        code = err$status,
+        message = paste("Error:", err$message)
+    )
+    if (!is.null(err$links)) {
+        out$links <- err$links
+    }
+    out
 }
 #' @rdname api_helpers
 #' @export
-api_stop <- function(status, ...) {
-    stop(errorCondition(paste0(...), status = status))
+api_stop <- function(status, ..., id = NULL) {
+    stop(errorCondition(paste0(...), status = status, id = id))
 }
 #' @rdname api_helpers
 #' @export
 api_success <- function(status, ...) {
     list(code = status, message = paste0(...))
 }
-#' @rdname api_helpers
-#' @export
+#' @keywords internal
 .openeocraft_default_api_base_url <- function() {
     env_host <- Sys.getenv("OPENEOCRAFT_API_BASE_URL", unset = "")
     if (nzchar(env_host)) {
@@ -108,6 +127,8 @@ api_success <- function(status, ...) {
     NULL
 }
 
+#' @rdname api_helpers
+#' @export
 get_host <- function(api, req) {
     host <- api_attr(api, "api_base_url")
     if (!is.null(host) && nzchar(host)) {
@@ -177,7 +198,7 @@ get_plumber <- function(api) {
 #' @keywords internal
 setup_plumber_spec <- function(api, pr, spec_endpoint) {
     spec_handler <- function(req, res, ...) {
-        # TODO: add models
+        # OpenAPI component models deferred; see DEVELOPMENT.md.
         utils::modifyList(
             list(servers = list(list(
                 url = make_url(get_host(api, req))
@@ -252,6 +273,9 @@ setup_plumber_docs <- function(api, pr, docs_endpoint, spec_endpoint) {
 #'   `get_token_user()` returns the user associated with a token.
 #'
 #' @name credential_helpers
+#'
+#' @examples
+#' get_token(list(HTTP_AUTHORIZATION = "Bearer abc123"))
 NULL
 
 #' @rdname credential_helpers
@@ -299,13 +323,26 @@ get_token <- function(req) {
     }
     auth <- trimws(auth)
     auth <- sub("^Bearer[[:space:]]+", "", auth, ignore.case = TRUE)
-    gsub("^.*//", "", auth)
+    # openEO bearer format: method/identityProviderId/token
+    # Also accept legacy bare tokens for existing clients/tests.
+    if (grepl("^[^/]*/[^/]*/.+$", auth)) {
+        parts <- strsplit(auth, "/", fixed = TRUE)[[1]]
+        return(paste(parts[-(1:2)], collapse = "/"))
+    }
+    if (grepl("/", auth, fixed = TRUE)) {
+        # Malformed method/provider/token shape
+        return(NA_character_)
+    }
+    auth
 }
 #' @rdname credential_helpers
 #' @export
 get_token_user <- function(api, token) {
-    if (!length(token)) {
+    if (!length(token) || (length(token) == 1L && !nzchar(token))) {
         api_stop(401L, "Token is missing")
+    }
+    if (length(token) == 1L && is.na(token)) {
+        api_stop(403L, "Invalid token format")
     }
     file <- api_attr(api, "credentials")
     if (is.null(file)) {
@@ -316,13 +353,32 @@ get_token_user <- function(api, token) {
         stop("Credential file not found", call. = FALSE)
     }
     if (!token %in% names(credentials$tokens)) {
-        api_stop(401L, "Invalid token")
+        api_stop(403L, "Invalid token")
     }
     if (Sys.time() > credentials$tokens[[token]]$expiry) {
-        api_stop(401L, "Token expired")
+        api_stop(403L, "Token expired")
     }
     user <- credentials$tokens[[token]]$user
     user
+}
+
+#' Reject paid plans when billing is not configured
+#'
+#' Free / empty plans always succeed. Non-free plans fail until billing is
+#' productized (see DEVELOPMENT.md).
+#'
+#' @param plan Character plan name from the job or request.
+#' @keywords internal
+assert_payment_allowed <- function(plan = "Free") {
+    plan_norm <- tolower(trimws(as.character(plan %||% "Free")))
+    if (!nzchar(plan_norm) || plan_norm %in% c("free")) {
+        return(invisible(TRUE))
+    }
+    api_stop(
+        402L,
+        "Payment required for plan '", plan, "'",
+        id = "PaymentRequired"
+    )
 }
 api_workdir <- function(api) {
     api$work_dir
@@ -335,6 +391,16 @@ api_workdir <- function(api) {
 #' @return Normalised path to the workspace directory.
 #'
 #' @export
+#'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo", title = "Demo", description = "Demo",
+#'     backend_version = "0.3.1", stac_api = NULL,
+#'     work_dir = tempdir(), production = FALSE
+#' )
+#' api_user_workspace(api, "alice")
+#' }
 api_user_workspace <- function(api, user) {
     if (!dir.exists(api_workdir(api))) {
         dir.create(api_workdir(api), recursive = TRUE)
@@ -381,9 +447,12 @@ create_env <- function(api, user, job, req) {
 #'   \item{output}{A list of supported output formats.}
 #' }
 #' @export
+#'
+#' @examples
+#' formats <- file_formats()
+#' names(formats$output)
 file_formats <- function() {
-    # TODO: improve file formats API enabling the registration of
-    #   additional formats
+    # Dynamic register_file_format() API deferred; see DEVELOPMENT.md.
     # Define the output formats
     output_formats <- list(
         GeoTiff = list(
@@ -499,6 +568,9 @@ file_formats_auth <- function(doc, api, token) {
 #' @return A character string containing the absolute URL.
 #'
 #' @export
+#'
+#' @examples
+#' make_job_files_url("https://example.com", "alice", "job1", "out.tif")
 make_job_files_url <- function(host, user, job_id, file) {
     token <- base64enc::base64encode(charToRaw(user))
     file <- file.path("/files/jobs", job_id, file)
@@ -512,8 +584,113 @@ make_job_files_url <- function(host, user, job_id, file) {
 #' @return A character string containing the absolute URL.
 #'
 #' @export
+#'
+#' @examples
+#' make_workspace_files_url("https://example.com", "alice", "data", "x.tif")
 make_workspace_files_url <- function(host, user, folder, file) {
     token <- base64enc::base64encode(charToRaw(user))
     file <- file.path("/files/root", folder, file)
     paste0(host, file, "?token=", token)
+}
+
+#' Parse optional openEO pagination query parameters
+#'
+#' `limit` omitted/empty means return all resources (openEO rule). When set it
+#' must be an integer `>= 1`. `page` defaults to `1`.
+#'
+#' @param req Plumber request (`req$args` holds query params).
+#' @return Integer limit, or `NULL` when pagination is off.
+#' @keywords internal
+parse_pagination_limit <- function(req) {
+    args <- req$args
+    if (is.null(args) || !"limit" %in% names(args)) {
+        return(NULL)
+    }
+    raw <- args$limit
+    if (is.null(raw) || (is.character(raw) && !nzchar(raw))) {
+        return(NULL)
+    }
+    limit <- suppressWarnings(as.integer(raw))
+    if (is.na(limit) || limit < 1L) {
+        api_stop(400L, "limit parameter must be >= 1")
+    }
+    limit
+}
+
+#' @rdname parse_pagination_limit
+#' @keywords internal
+parse_pagination_page <- function(req) {
+    args <- req$args
+    if (is.null(args) || !"page" %in% names(args)) {
+        return(1L)
+    }
+    raw <- args$page
+    if (is.null(raw) || (is.character(raw) && !nzchar(raw))) {
+        return(1L)
+    }
+    page <- suppressWarnings(as.integer(raw))
+    if (is.na(page) || page < 1L) {
+        api_stop(400L, "page parameter must be >= 1")
+    }
+    page
+}
+
+#' Slice a resource list and attach pagination links
+#'
+#' @param items List of resources.
+#' @param doc Document that already has a `links` list (e.g. with `self`).
+#' @param api API object.
+#' @param req Plumber request.
+#' @param endpoint Path such as `"/jobs"` or `"/processes"`.
+#' @param limit Optional page size (`NULL` = no pagination).
+#' @param page Page number (1-based).
+#' @return List with `items` (possibly sliced) and updated `doc` links.
+#' @keywords internal
+paginate_resource_list <- function(items, doc, api, req, endpoint,
+                                   limit = NULL, page = 1L) {
+    if (is.null(limit)) {
+        return(list(items = items, doc = doc))
+    }
+    total <- length(items)
+    total_pages <- max(1L, as.integer(ceiling(total / limit)))
+    page <- min(as.integer(page), total_pages)
+    from <- (page - 1L) * limit + 1L
+    to <- min(page * limit, total)
+    if (total == 0L || from > total) {
+        sliced <- list()
+    } else {
+        sliced <- items[from:to]
+    }
+    host <- get_host(api, req)
+    if (page < total_pages) {
+        doc <- add_link(
+            doc,
+            rel = "next",
+            href = make_url(host, endpoint, limit = limit, page = page + 1L),
+            type = "application/json"
+        )
+    }
+    if (page > 1L) {
+        doc <- add_link(
+            doc,
+            rel = "prev",
+            href = make_url(host, endpoint, limit = limit, page = page - 1L),
+            type = "application/json"
+        )
+        doc <- add_link(
+            doc,
+            rel = "first",
+            href = make_url(host, endpoint, limit = limit, page = 1L),
+            type = "application/json"
+        )
+    }
+    if (page < total_pages) {
+        doc <- add_link(
+            doc,
+            rel = "last",
+            href = make_url(host, endpoint, limit = limit, page = total_pages),
+            type = "application/json"
+        )
+    }
+    list(items = sliced, doc = doc)
 }

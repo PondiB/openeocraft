@@ -1,12 +1,13 @@
 # OpenEOcraft
 
 [![Unit Tests](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/tests.yml/badge.svg?branch=dev)](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/tests.yml)
+[![R-CMD-check](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/R-CMD-check.yml/badge.svg)](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/R-CMD-check.yml)
 [![Docker build](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/docker-build-verify.yml/badge.svg?branch=dev)](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/docker-build-verify.yml)
 [![Terraform validate](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/terraform-validate.yml/badge.svg?branch=dev)](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/terraform-validate.yml)
 [![Docker publish](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/docker-compose-workflow.yml/badge.svg?branch=deploy)](https://github.com/Open-Earth-Monitor/openeocraft/actions/workflows/docker-compose-workflow.yml)
 [![Docker Hub](https://img.shields.io/docker/pulls/brianpondi/openeocraft.svg)](https://hub.docker.com/r/brianpondi/openeocraft)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![R](https://img.shields.io/badge/R-%3E%3D4.5.0-blue)](https://www.r-project.org/)
+[![R](https://img.shields.io/badge/R-%3E%3D4.4.0-blue)](https://www.r-project.org/)
 
 **OpenEOcraft** is a generic R-based framework for Earth observation (EO) data cube analysis that plugs into the [openEO](https://openeo.org/) ecosystem. It connects R’s geospatial, statistical, and machine learning stacks to openEO clients (R, Python, Julia, JavaScript, Web Editor) through a standard REST API and process graphs, with STAC-oriented data discovery where configured. Compared with backends tied to a single cube engine, OpenEOcraft is built for **multi-library** workflows (e.g. [sits](https://github.com/e-sensing/sits), [stars](https://r-spatial.github.io/stars/), [terra](https://rspatial.org/terra/), [gdalcubes](https://github.com/appelmar/gdalcubes)) under one openEO-compliant surface.
 
@@ -195,7 +196,7 @@ docker run -d --name openeocraft --restart unless-stopped \
   brianpondi/openeocraft:latest
 ```
 
-5. **GPU (optional)** — install the [NVIDIA driver](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/index.html) and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), then:
+5. **GPU (optional)** — install the [NVIDIA driver](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/latest/index.html) and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), then:
 
 ```bash
 docker run -d --name openeocraft --restart unless-stopped \
@@ -337,7 +338,7 @@ Requires a Python client with ML helpers, e.g.:
 pip install git+https://github.com/PondiB/openeo-python-client.git
 ```
 
-**Timeline / bands:** [`samples_deforestation_rondonia.rds`](https://github.com/Open-Earth-Monitor/openeocraft/raw/main/inst/demo-paper-2025/data/samples_deforestation_rondonia.rds) was built for a **P16D** cube (not P1M) and the same preprocessing as that R script (**600 m** resolution, selected bands + NDVI). If `cube_regularize` uses a different **`period`** or **`resolution`**, sits raises **`.check_samples_tile_match_timeline: tile timeline does not match samples timeline`**. After regularize, call `ndvi` with explicit band names if needed, e.g. **`nir="B08"`**, **`red="B04"`**, **`target_band="NDVI"`** (see [`inst/ml/processes/ndvi.json`](inst/ml/processes/ndvi.json)). For a smaller 10-band cube without NDVI, see the second Python block and [`01_ml_api_eo_data_cubes.ipynb`](inst/demo-lps-2025/01_ml_api_eo_data_cubes.ipynb).
+**Timeline / bands:** [`samples_deforestation_rondonia.rds`](https://github.com/e-sensing/sitsdata/raw/main/data/samples_deforestation_rondonia.rds) was built for a **P16D** cube (not P1M) and the same preprocessing as that R script (**600 m** resolution, selected bands + NDVI). If `cube_regularize` uses a different **`period`** or **`resolution`**, sits raises **`.check_samples_tile_match_timeline: tile timeline does not match samples timeline`**. After regularize, call `ndvi` with explicit band names if needed, e.g. **`nir="B08"`**, **`red="B04"`**, **`target_band="NDVI"`** (see [`inst/ml/processes/ndvi.json`](inst/ml/processes/ndvi.json)). For a smaller 10-band cube without NDVI, see the second Python block and [`01_ml_api_eo_data_cubes.ipynb`](https://github.com/Open-Earth-Monitor/openeocraft/blob/dev/inst/demo-lps-2025/01_ml_api_eo_data_cubes.ipynb).
 
 ```python
 #!/usr/bin/env python3
@@ -546,5 +547,28 @@ job.get_results().download_files("output")
 ```
 
 **Other workflows:** Random forest + Breizh-style alignment (constants shared with R) live in `inst/examples/breizh_openeo_training_predict_aligned.py`. Step-by-step notebooks: `inst/demo-lps-2025/`.
+
+## Citation
+
+If you use OpenEOcraft in research, please cite:
+
+> Pondi, B., & Simoes, R. (2026). OpenEOcraft: A generic R-based framework for earth observation data cubes analysis. *Environmental Modelling & Software*, *204*, 107087. https://doi.org/10.1016/j.envsoft.2026.107087
+
+```bibtex
+@article{PondiSimoes2026OpenEOcraft,
+  title   = {OpenEOcraft: A generic R-based framework for earth observation data cubes analysis},
+  author  = {Pondi, Brian and Simoes, Rolf},
+  journal = {Environmental Modelling \& Software},
+  volume  = {204},
+  pages   = {107087},
+  year    = {2026},
+  doi     = {10.1016/j.envsoft.2026.107087},
+  url     = {https://doi.org/10.1016/j.envsoft.2026.107087}
+}
+```
+
+## Development
+
+Local vs Docker workflows, process registration, and the **TODO / capabilities roadmap** (what was hardened vs deliberately deferred) live in [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 

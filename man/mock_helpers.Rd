@@ -31,3 +31,9 @@ list that mimics the \code{.well-known/openeo} endpoint payload.
 Utilities that emulate plumber request and response objects for tests and
 examples.
 }
+\examples{
+req <- mock_req("/jobs", method = "GET")
+res <- mock_res()
+res$setHeader("Content-Type", "application/json")
+res$getHeader("Content-Type")
+}

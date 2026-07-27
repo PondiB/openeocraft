@@ -90,6 +90,8 @@
 #'
 #' @param job_id The identifier for the job
 #'
+#' @param process_graph_id Identifier of a stored user-defined process.
+#'
 #' @param ... Additional arguments to be passed to the method-specific
 #'   functions.
 #'
@@ -108,6 +110,18 @@
 #'
 #' @name api_handling
 #'
+#' @examples
+#' \donttest{
+#' api <- create_openeo_v1(
+#'     id = "demo",
+#'     title = "Demo",
+#'     description = "Demo API",
+#'     backend_version = "0.3.1",
+#'     stac_api = NULL,
+#'     work_dir = tempdir(),
+#'     production = FALSE
+#' )
+#' }
 NULL
 #' @rdname api_handling
 #' @export
@@ -176,7 +190,7 @@ api_setup_plumber <- function(api,
                               docs_endpoint = "/docs",
                               wellknown_versions = list()) {
     stopifnot(is_absolute_url(api_base_url))
-    # TODO: replace all calls to `api_attr()` by proper functions
+    # Prefer dedicated getters/setters over raw api_attr() where they exist.
     api_attr(api, "plumber") <- pr
     api_attr(api, "api_base_url") <- api_base_url
     set_wellknown_versions(api, wellknown_versions)
@@ -253,17 +267,40 @@ api_job_start <- function(api, req, res, job_id) {
 api_file_formats <- function(api, req, res) {
     UseMethod("api_file_formats", api)
 }
-# TODO:
-# - Supported UDF runtimes `GET /udf_runtime`
-# - Supported secondary web service protocols `GET /service_types`
-# - OpenID Connect authentication `GET /credentials/oidc`
-# - HTTP Basic authentication `GET /credentials/basic`
-# - Information about the authenticated user `GET /me`
-# - (openstac) Metadata filters for a specific dataset
-#                   `GET /collections/{collection_id}/queryables`
-# - List all user-defined processes `GET /process_graphs`
-# - Full metadata for a user-defined process
-#                   `GET /process_graphs/{process_graph_id}`
-# - Validate a user-defined process (graph) `POST /validation`
-# - Store a user-defined process `PUT /process_graphs/{process_graph_id}`
-# - Delete a user-defined process `DELETE /process_graphs/{process_graph_id}`
+#' @rdname api_handling
+#' @export
+api_me <- function(api, req, res) {
+    UseMethod("api_me", api)
+}
+#' @rdname api_handling
+#' @export
+api_credentials_oidc <- function(api, req, res) {
+    UseMethod("api_credentials_oidc", api)
+}
+#' @rdname api_handling
+#' @export
+api_job_cancel_results <- function(api, req, res, job_id) {
+    UseMethod("api_job_cancel_results", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graphs_list <- function(api, req, res) {
+    UseMethod("api_process_graphs_list", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graph_get <- function(api, req, res, process_graph_id) {
+    UseMethod("api_process_graph_get", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graph_put <- function(api, req, res, process_graph_id) {
+    UseMethod("api_process_graph_put", api)
+}
+#' @rdname api_handling
+#' @export
+api_process_graph_delete <- function(api, req, res, process_graph_id) {
+    UseMethod("api_process_graph_delete", api)
+}
+# Deferred openEO endpoints (UDF runtimes, …):
+# see DEVELOPMENT.md "Roadmap / TODO triage".

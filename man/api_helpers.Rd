@@ -15,7 +15,7 @@ api_cors_handler(req, res, origin = "*", methods = "*")
 
 api_error_handler(req, res, err)
 
-api_stop(status, ...)
+api_stop(status, ..., id = NULL)
 
 api_success(status, ...)
 
@@ -50,6 +50,8 @@ works if the \code{api_error_handler} function is handling errors in
 
 \item{...}{Additional arguments to be passed to error handling functions.}
 
+\item{id}{Optional openEO error identifier included in the JSON body.}
+
 \item{api}{The openeocraft API object used to service the request.}
 }
 \description{
@@ -77,6 +79,13 @@ function.
 
 \item \code{get_method}: Get the HTTP method from an \code{req} object.
 
+}
+}
+\examples{
+\dontrun{
+# Typically registered on a plumber router:
+# pr <- plumber::pr()
+# pr <- plumber::pr_set_error(pr, api_error_handler)
 }
 }
 \references{

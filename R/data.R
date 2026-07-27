@@ -1,3 +1,13 @@
+#' Serialize a synchronous openEO result onto a plumber response
+#'
+#' Used by [api_result()] for `POST /result`. Binary formats read the file at
+#' `x$data` into `res$body` and set `Content-Type`. For the alternate plumber
+#' `@serializer serialize_result` path, see [get_serializer()].
+#'
+#' @param x S3 object with class `openeo_<format>` and a `data` file path.
+#' @param res Plumber response object.
+#' @return The updated `res`.
+#' @keywords internal
 data_serializer <- function(x, res) {
     UseMethod("data_serializer", x)
 }
@@ -15,7 +25,7 @@ data_serializer.openeo_gtiff <- function(x, res) {
 }
 #' @export
 data_serializer.openeo_netcdf <- function(x, res) {
-    res$setHeader("Content-Type", "application/octet-stream")
+    res$setHeader("Content-Type", "application/netcdf")
     res$body <- readBin(x$data, what = "raw", n = file.info(x$data)$size)
     res
 }
@@ -44,6 +54,11 @@ data_serializer.openeo_tar <- function(x, res) {
 #'   content type.
 #'
 #' @name format_helpers
+#'
+#' @examples
+#' format_ext("gtiff")
+#' ext_format("result.tif")
+#' format_content_type("netcdf")
 NULL
 
 #' @rdname format_helpers
@@ -59,7 +74,7 @@ format_ext <- function(format) {
 #' @rdname format_helpers
 #' @export
 ext_format <- function(filename) {
-    ext <- gsub("\\.([^.]+)$", "\\1", filename)
+    ext <- gsub(".*\\.([^.]+)$", "\\1", filename)
     switch(ext,
         tif = "gtiff",
         nc = "netcdf",
@@ -73,7 +88,7 @@ ext_content_type <- function(filename) {
     ext <- gsub(".*\\.([^.]+)$", "\\1", filename)
     switch(ext,
         tif = "image/tiff",
-        nc = "application/octet-stream",
+        nc = "application/netcdf",
         rds = "application/rds",
         json = "application/json"
     )
@@ -84,7 +99,7 @@ format_content_type <- function(format) {
     format <- tolower(format)
     switch(format,
         gtiff = "image/tiff",
-        netcdf = "application/octet-stream",
+        netcdf = "application/netcdf",
         rds = "application/rds",
         json = "application/json"
     )

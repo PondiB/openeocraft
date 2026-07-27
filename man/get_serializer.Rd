@@ -4,6 +4,8 @@
 \alias{get_serializer}
 \alias{get_serializer.openeo_json}
 \alias{get_serializer.openeo_gtiff}
+\alias{get_serializer.openeo_netcdf}
+\alias{get_serializer.openeo_tar}
 \alias{get_serializer.openeo_rds}
 \title{Choose a plumber serializer for an openEO result object}
 \usage{
@@ -13,15 +15,18 @@ get_serializer(data)
 
 \method{get_serializer}{openeo_gtiff}(data)
 
+\method{get_serializer}{openeo_netcdf}(data)
+
+\method{get_serializer}{openeo_tar}(data)
+
 \method{get_serializer}{openeo_rds}(data)
 }
 \arguments{
 \item{data}{Result object with class \code{openeo_rds}.}
 }
 \value{
-A serializer \strong{generator} function compatible with plumber
-(\code{function() { function(val, req, res, error_handler) { ... } }} style
-for \code{serialize_result}).
+A plumber serializer function
+(\verb{function(val, req, res, errorHandler)}).
 }
 \description{
 Choose a plumber serializer for an openEO result object
@@ -30,7 +35,11 @@ Choose a plumber serializer for an openEO result object
 \itemize{
 \item \code{get_serializer(openeo_json)}: JSON body via \code{plumber::serializer_json()}
 
-\item \code{get_serializer(openeo_gtiff)}: GeoTIFF serializer (not yet implemented)
+\item \code{get_serializer(openeo_gtiff)}: GeoTIFF bytes with \code{image/tiff} content type
+
+\item \code{get_serializer(openeo_netcdf)}: NetCDF file body (\code{application/netcdf})
+
+\item \code{get_serializer(openeo_tar)}: Tar archive with \code{application/x-tar}
 
 \item \code{get_serializer(openeo_rds)}: Native R RDS via \code{plumber::serializer_rds()}
 

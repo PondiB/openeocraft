@@ -21,3 +21,6 @@ A character string containing the absolute URL.
 \description{
 Build the download URL for a workspace artefact
 }
+\examples{
+make_workspace_files_url("https://example.com", "alice", "data", "x.tif")
+}
